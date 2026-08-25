@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+#
+# go-jupyter-refresh-user — re-apply the current starter template (skills +
+# config files) to an already-seeded user WITHOUT destroying their work.
+#
+# Existing users are frozen at their first-login seed (the ~/.seeded marker), so
+# new skills/features added to a template don't reach them automatically. This
+# helper pushes the template's *template-owned* files into a user's home:
+#
+#   .claude/skills/   CLAUDE.md   README.md   .bashrc   .mcp.json
+#
+# and NOTHING else — user-created files, ~/.claude.json, and
+# ~/.claude/settings.json are never touched or deleted. Any template file that
+# *changes* has its previous version preserved under
+#   ~user/.go-jupyter/refresh-backups/<timestamp>/
+# (a per-refresh dated backup), so nothing is ever silently lost.
+#
+# Usage:
+#   sudo go-jupyter-refresh-user <username> | --all
+#        [--template NAME]     override the template (else read from ~/.seeded,
+#                              else 'researcher')
+#        [--prune-skills]      also remove skills deleted from the template
+#                              (their old copies are still backed up); default
+#                              is add/update only, never remove
+#        [--dry-run]           show what would change, touch nothing
+#
+# No hub restart: this is a file operation. New skills take effect on the user's
+# next `claude` launch (skills load at launch); a running session is unaffected.
+# Like the other go-jupyter-* runtime helpers it drifts the box from Terraform's
+# view in a bounded way (homes are outside Terraform anyway).
+#
+set -euo pipefail
+
+TEMPLATE_ROOT=/opt/go-jupyter/user-templates
+DEFAULT_TEMPLATE=researcher
+CONFIG_FILES=(CLAUDE.md README.md .bashrc .mcp.json)
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "must run as root (try: sudo $0 $*)" >&2
+    exit 1
+fi
+
+usage() {
+    echo "usage: sudo go-jupyter-refresh-user <username>|--all [--template NAME] [--prune-skills] [--dry-run]" >&2
+    exit 2
+}
+
+TARGETS=()
+OVERRIDE_TEMPLATE=""
+PRUNE=0
+DRY=0
+ALL=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --all)          ALL=1 ;;
+        --template)     OVERRIDE_TEMPLATE="${2:-}"; shift ;;
+        --prune-skills) PRUNE=1 ;;
+        --dry-run)      DRY=1 ;;
+        -h|--help)      usage ;;
+        -*)             echo "unknown option: $1" >&2; usage ;;
+        *)              TARGETS+=("$1") ;;
+    esac
+    shift
+done
+
+if [ "$ALL" -eq 1 ]; then
+    # every seeded human account (UID >= 1000, not ubuntu, has ~/.seeded)
+    while IFS=: read -r name _ uid _ _ home _; do
+        [ "${uid:-0}" -ge 1000 ] 2>/dev/null || continue
+        case "$name" in ubuntu | nobody) continue ;; esac
+        [ -f "$home/.seeded" ] && TARGETS+=("$name")
+    done < <(getent passwd)
+fi
+[ ${#TARGETS[@]} -gt 0 ] || usage
+
+TS="$(date +%Y-%m-%dT%H%M%S)"
+DRYFLAG=""
+if [ "$DRY" -eq 1 ]; then DRYFLAG="--dry-run"; fi
+
+refresh_one() {
+    local user="$1" home tmpl src bkroot del=""
+    home="$(getent passwd "$user" | cut -d: -f6)"
+    if [ -z "$home" ] || [ ! -d "$home" ]; then
+        echo "  skip $user: no home directory"
+        return
+    fi
+    tmpl="$OVERRIDE_TEMPLATE"
+    if [ -z "$tmpl" ]; then
+        tmpl="$(head -n1 "$home/.seeded" 2>/dev/null | tr -d '[:space:]' || true)"
+        [ -n "$tmpl" ] || tmpl="$DEFAULT_TEMPLATE"
+    fi
+    src="$TEMPLATE_ROOT/$tmpl"
+    if [ ! -d "$src" ]; then
+        echo "  skip $user: template '$tmpl' not found under $TEMPLATE_ROOT"
+        return
+    fi
+    bkroot="$home/.go-jupyter/refresh-backups/$TS"
+    echo "== $user (template: $tmpl) =="
+
+    # 1. Skills. --backup-dir moves the previous version of any changed (and,
+    #    with --prune-skills, removed) file into the dated backup dir.
+    if [ -d "$src/.claude/skills" ]; then
+        if [ "$PRUNE" -eq 1 ]; then del="--delete"; fi
+        rsync -a $DRYFLAG $del --backup --backup-dir="$bkroot/.claude/skills" \
+            "$src/.claude/skills/" "$home/.claude/skills/"
+    fi
+
+    # 2. Top-level template config files (add/update only; previous versions
+    #    backed up). Never --delete these.
+    for f in "${CONFIG_FILES[@]}"; do
+        [ -e "$src/$f" ] || continue
+        rsync -a $DRYFLAG --backup --backup-dir="$bkroot" "$src/$f" "$home/"
+    done
+
+    if [ "$DRY" -eq 0 ]; then
+        chown -R "$user:$user" "$home/.claude" "$home/.go-jupyter" 2>/dev/null || true
+        for f in "${CONFIG_FILES[@]}"; do
+            [ -e "$home/$f" ] && chown "$user:$user" "$home/$f"
+        done
+        logger -t go-jupyter-refresh-user \
+            "operator=${SUDO_USER:-root} user=$user template=$tmpl prune=$PRUNE"
+    fi
+}
+
+for u in "${TARGETS[@]}"; do
+    refresh_one "$u"
+done
+
+echo
+if [ "$DRY" -eq 1 ]; then
+    echo "dry-run: nothing changed."
+else
+    echo "done. Any superseded files are under ~user/.go-jupyter/refresh-backups/$TS/"
+    echo "New skills take effect on each user's next \`claude\` launch; no restart needed, running sessions unaffected."
+fi

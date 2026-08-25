@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+#
+# go-jupyter-migrate — port real login users (unix accounts + home dirs) from a
+# prior go-jupyter instance onto THIS one.
+#
+# This is the on-demand escape hatch for moving to a *genuinely new* instance
+# (an AMI/architecture change, or a blue/green swap). It is NOT needed to make
+# a box bigger: a same-architecture instance-size bump is an in-place
+# stop/start on the same root EBS, so /home and accounts already survive that.
+#
+#
+# WHAT MOVES
+#   1. /home/*                            (data; ownership preserved by numeric UID)
+#   2. account rows for UID >= 1000       (/etc/passwd, /etc/shadow, /etc/group),
+#      excluding 'ubuntu' — so logins (PAM hashes) and file ownership carry over
+#   3. /etc/jupyterhub/local_users.txt    (the PAM Tier-B allowlist)
+#   The JupyterHub sqlite DB is intentionally NOT copied: users simply re-login
+#   and the hub recreates their records; homes + allowlist are what matter.
+#
+# PRECONDITIONS
+#   * Run ON THE NEW BOX, as root (sudo).
+#   * Run BEFORE anyone logs into the new box. A fresh box has only 'ubuntu' at
+#     UID 1000; our users are 1001+, so their rows slot in with no UID
+#     collisions and rsync --numeric-ids lands ownership with zero re-chown.
+#   * You need ssh to the old box as 'ubuntu' (the go-jupyter key), and 'ubuntu'
+#     there must have passwordless sudo (default on Ubuntu cloud AMIs).
+#
+# ASSUMPTIONS
+#   * Accounts were created by useradd -m (per-user primary group, name==user).
+#     Shared/custom groups beyond the per-user group are not migrated.
+#
+# USAGE
+#   sudo go-jupyter-migrate <old-host> [ssh-key] [--dry-run]
+#
+set -euo pipefail
+
+usage() {
+    echo "usage: sudo go-jupyter-migrate <old-host> [ssh-key] [--dry-run]" >&2
+    exit 2
+}
+
+OLD=""
+KEY=""
+DRY=0
+for a in "$@"; do
+    case "$a" in
+        --dry-run) DRY=1 ;;
+        -*) usage ;;
+        *)
+            if [ -z "$OLD" ]; then OLD="$a"
+            elif [ -z "$KEY" ]; then KEY="$a"
+            else usage; fi ;;
+    esac
+done
+[ -n "$OLD" ] || usage
+if [ "$(id -u)" -ne 0 ]; then
+    echo "must run as root (try: sudo $0 $*)" >&2
+    exit 1
+fi
+
+# Host-key verification enabled: accept-new trusts a first-seen host key and
+# pins it in known_hosts, but refuses a changed key on later runs.
+SSH=(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20)
+if [ -n "$KEY" ]; then
+    SSH+=(-i "$KEY")
+fi
+REMOTE="ubuntu@$OLD"
+RSH="${SSH[*]}"   # rsync -e wants a single string; opts carry no spaces here
+DRYFLAG=""
+if [ "$DRY" -eq 1 ]; then
+    DRYFLAG="--dry-run"
+fi
+
+say()  { printf '\n== %s ==\n' "$*"; }
+run() { echo "+ $*"; if [ "$DRY" -eq 0 ]; then "$@"; fi; }
+
+say "go-jupyter-migrate: $REMOTE -> $(hostname)  (dry-run=$DRY)"
+
+# Reachability + passwordless sudo on the old box.
+if ! "${SSH[@]}" "$REMOTE" 'sudo -n true' >/dev/null 2>&1; then
+    echo "cannot ssh+sudo to $REMOTE (check host, ssh key, and passwordless sudo)" >&2
+    exit 1
+fi
+
+# 1) Home directories — preserve ownership by numeric UID/GID; read root-owned
+#    files on the remote via passwordless 'sudo rsync'.
+say "rsync /home"
+run rsync -aHAX --numeric-ids $DRYFLAG \
+    --rsync-path="sudo rsync" -e "$RSH" "$REMOTE:/home/" /home/
+
+# 2) Account rows for real users (UID >= 1000, excluding ubuntu).
+say "account rows (passwd/shadow/group) for UID>=1000, excluding ubuntu"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+"${SSH[@]}" "$REMOTE" 'sudo getent passwd'    > "$tmp/passwd"
+"${SSH[@]}" "$REMOTE" 'sudo getent group'     > "$tmp/group"
+"${SSH[@]}" "$REMOTE" 'sudo cat /etc/shadow'  > "$tmp/shadow"
+"${SSH[@]}" "$REMOTE" 'sudo cat /etc/gshadow' > "$tmp/gshadow"
+
+if [ "$DRY" -eq 0 ]; then
+    cp -a /etc/passwd  /etc/passwd.migrate.bak
+    cp -a /etc/group   /etc/group.migrate.bak
+    cp -a /etc/shadow  /etc/shadow.migrate.bak
+    cp -a /etc/gshadow /etc/gshadow.migrate.bak
+fi
+
+while IFS=: read -r name _ uid gid _ _ _; do
+    [ "${uid:-0}" -ge 1000 ] 2>/dev/null || continue
+    case "$name" in ubuntu|nobody) continue ;; esac
+    if id "$name" >/dev/null 2>&1; then
+        echo "  skip $name (already exists here)"
+        continue
+    fi
+    prow="$(grep "^$name:" "$tmp/passwd" || true)"
+    srow="$(grep "^$name:" "$tmp/shadow" || true)"
+    grow="$(awk -F: -v g="$gid" '$3==g {print; exit}' "$tmp/group")"
+    if [ -z "$grow" ]; then
+        grow="$name:x:$gid:"
+    fi
+    echo "  add $name (uid=$uid gid=$gid)"
+    if [ "$DRY" -eq 0 ]; then
+        # Add the primary group (and its /etc/gshadow row) if that GID isn't
+        # already present here.
+        if ! getent group "$gid" >/dev/null 2>&1; then
+            echo "$grow" >> /etc/group
+            gname="${grow%%:*}"
+            ggrow="$(grep "^$gname:" "$tmp/gshadow" || true)"
+            [ -n "$ggrow" ] || ggrow="$gname:!::"
+            echo "$ggrow" >> /etc/gshadow
+        fi
+        echo "$prow" >> /etc/passwd
+        if [ -n "$srow" ]; then
+            echo "$srow" >> /etc/shadow
+        fi
+    fi
+done < "$tmp/passwd"
+
+# 3) PAM Tier-B allowlist.
+say "/etc/jupyterhub/local_users.txt"
+run rsync -a $DRYFLAG --rsync-path="sudo rsync" -e "$RSH" \
+    "$REMOTE:/etc/jupyterhub/local_users.txt" /etc/jupyterhub/local_users.txt
+
+if [ "$DRY" -eq 0 ]; then
+    pwck -q -r || echo "  (pwck reported issues — review /etc/passwd)"
+    grpck -r   || echo "  (grpck reported issues — review /etc/group)"
+fi
+
+say "done"
+cat <<'MSG'
+Next steps:
+  * systemctl restart jupyterhub     # pick up the migrated PAM allowlist
+  * cut the Elastic IP over to this instance via Terraform (the one
+    AWS-state-changing step) so the public hostname now points here.
+Backups of the pre-migration passwd/group/shadow are at /etc/*.migrate.bak
+MSG

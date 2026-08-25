@@ -1,0 +1,5 @@
+- title: GO Agent
+  description: Launch Claude Code AI assistant
+  type: terminal
+  source: claude --dangerously-skip-permissions --trust-workspace
+  catalog: AI Tools

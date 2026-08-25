@@ -1,0 +1,21 @@
+[Unit]
+Description=go-jupyter: periodically sync curator skills from the repo
+Documentation=https://github.com/geneontology/go-jupyter
+
+[Timer]
+# First run shortly after boot, then every 5 minutes. Jitter avoids all boxes
+# hitting GitHub in lockstep. A no-op tick is one small git fetch (~1s, nice'd,
+# idle IO); the mirror only runs when the skills tree actually changed.
+#
+# GitHub load is a non-issue at this cadence: we fetch over SSH (deploy key), and
+# GitHub's published rate limits cover the REST/GraphQL API only — there is no
+# documented limit on conventional git fetch. 12 fetches/hour from one box, each
+# a ref advertisement of a few KB, is well under any abuse threshold (a dev's IDE
+# auto-fetching every 60s is 5x this).
+OnBootSec=5min
+OnUnitActiveSec=5min
+RandomizedDelaySec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target

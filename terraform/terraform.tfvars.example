@@ -1,0 +1,72 @@
+# Copy to terraform.tfvars and edit. terraform.tfvars is gitignored (it holds
+# paths to your credentials and, if you use local_users, plaintext passwords).
+
+region              = "us-east-1"
+environment         = "test" # short label; combined with a random suffix into the Deployment tag
+instance_type       = "t3.large"
+root_volume_size_gb = 100
+
+# Path to the SSH public key to install on the box.
+ssh_public_key_path = "/home/you/.ssh/go-jupyter.pub"
+
+# Open for first bring-up. Tighten to a known CIDR before sharing the URL.
+allowed_ssh_cidrs = ["0.0.0.0/0"]
+allowed_web_cidrs = ["0.0.0.0/0"]
+
+# Public DNS + TLS. During iteration leave hostname_override unset: the hostname
+# is computed as ${hostname_prefix}-${random_suffix}.${route53_zone_name} and
+# auto-rolls on every destroy+apply cycle, avoiding LE's 5-duplicate-certs/week
+# limit. For a stable cutover set hostname_override.
+hostname_prefix   = "jupyter-test"
+# hostname_override = "jupyter.example.org"
+route53_zone_name = "REPLACE_ME" # required: a Route53 zone you control (GO production: geneontology.io)
+acme_email        = "you@example.org" # used only as the ContactEmail resource tag
+
+# Deployment source. Defaults to this public repo over HTTPS; point it at your
+# own fork to serve your own skills and templates. Use an SSH URL + a deploy key
+# only when the source repo is private.
+git_repo_ssh_url = "https://github.com/geneontology/go-jupyter.git"
+git_ref          = "main"
+# deploy_key_private_path = "/home/you/.ssh/go-jupyter-deploy"   # only if the source repo is private
+
+# Model/provider backend Claude Code talks to.
+#   "anthropic" — first-party Claude API, using anthropic_api_key_path below.
+#   "vertex"    — Anthropic models on Vertex AI, using gcp_credentials_json_path.
+# Switchable in place on the box for testing (edit /etc/default/go-jupyter +
+# `sudo systemctl restart jupyterhub`), which avoids an instance replacement.
+backend = "anthropic"
+
+# Path to a file holding the backend API key. Read at plan time via file() and
+# baked into user_data; the key value itself lives only in this out-of-band
+# file, never inline in tfvars. Leave empty when backend = "vertex".
+anthropic_api_key_path = ""
+# anthropic_api_key_path = "/home/you/.secrets/anthropic-api-key"
+
+# GCP service account JSON key for Vertex AI. Only needed when backend =
+# "vertex"; leave empty for the 'anthropic' backend.
+gcp_credentials_json_path = ""
+# gcp_credentials_json_path = "/home/you/.secrets/vertex-sa-key.json"
+
+# Out-of-band local users for the PAM (Tier B) authenticator. Created at boot
+# via useradd + chpasswd and added to /etc/jupyterhub/local_users.txt.
+# Operators can also add users at runtime via `sudo go-jupyter-add-user <name>`.
+# Sensitive (plaintext passwords; gitignored here, and they land in
+# terraform.tfstate). Leave as [] to deploy with no OOB accounts.
+local_users = [
+  # { username = "alice", password = "change-me" },
+  # { username = "bob",   password = "change-me" },
+]
+
+# GitHub OAuth App for the GitHubOAuthenticator (Tier A). Register an OAuth App
+# with callback https://<your-hostname>/hub/oauth_callback. Leave both fields
+# empty to deploy with the OAuth tier disabled (only Tier B / PAM on the login
+# page).
+github_oauth_client_id     = ""
+github_oauth_client_secret = ""
+
+# Required: a wildcard-cert bundle (certbot tree, tar.gz) in an S3 bucket you
+# control; the box fetches it at boot via its IAM role. Must contain
+# live/<cert_domain>/{fullchain,privkey}.pem. GO production uses
+# s3://go-service-lockbox/<domain>.tar.gz.
+wildcard_cert_s3_uri = "REPLACE_ME"
+# cert_domain = "example.org"   # defaults to route53_zone_name if unset

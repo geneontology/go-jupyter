@@ -1,0 +1,8 @@
+{
+  "disabledExtensions": {
+    "@jupyterlab/notebook-extension": true,
+    "@jupyterlab/console-extension": true,
+    "@jupyterlab/extensionmanager-extension": true,
+    "@jupyterlab/settingeditor-extension": true
+  }
+}

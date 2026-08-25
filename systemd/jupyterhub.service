@@ -1,0 +1,24 @@
+[Unit]
+Description=JupyterHub (go-jupyter)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/go-jupyter
+# Per-deployment env (hostname, GitHub OAuth client id/secret) is written
+# by cloud-init from terraform.tfvars. The leading `-` makes the file
+# optional so the unit still works on a deployment with no OAuth wired.
+EnvironmentFile=-/etc/jupyterhub/jupyterhub.env
+# Model/provider backend selection (GO_JUPYTER_BACKEND), written by cloud-init
+# from the Terraform `backend` var; also editable in place for testing.
+EnvironmentFile=-/etc/default/go-jupyter
+ExecStart=/opt/go-jupyter/.venv/bin/jupyterhub -f /opt/go-jupyter/jupyterhub_config.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

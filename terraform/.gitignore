@@ -1,0 +1,9 @@
+.terraform/
+terraform.tfstate
+terraform.tfstate.*
+terraform.tfvars
+*.auto.tfvars
+crash.log
+# Saved plans contain the full rendered user_data, including the deploy key bytes.
+tfplan
+tfplan.*

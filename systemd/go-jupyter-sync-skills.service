@@ -1,0 +1,12 @@
+[Unit]
+Description=go-jupyter: sync curator skills from the repo into user homes
+Documentation=https://github.com/geneontology/go-jupyter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/go-jupyter-sync-skills
+# Best-effort: a failed run is logged and retried on the next timer tick.
+Nice=10
+IOSchedulingClass=idle

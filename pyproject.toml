@@ -1,0 +1,18 @@
+[project]
+name = "go-jupyter"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jupyterhub[jupyterlab,notebook]>=5.4.4",
+    "jupyterlab>=4.5.6",
+    # FirstUseAuthenticator is kept in deps for the local-dev path
+    # (jupyterhub_config.py's IS_ROOT==False branch). Production
+    # deployments use MultiAuthenticator (PAM plus GitHub OAuth) instead.
+    "jupyterhub-firstuseauthenticator>=1.1",
+    "jupyterhub-multiauthenticator>=0.4",
+    # oauthenticator provides the GitHub OAuth half of the production
+    # MultiAuthenticator (requires a registered GitHub OAuth App).
+    "oauthenticator>=17.0",
+]

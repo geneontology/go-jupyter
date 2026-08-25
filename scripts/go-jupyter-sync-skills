@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+#
+# go-jupyter-sync-skills — continuous delivery for curator-authored skills
+# and operator announcements (news).
+#
+# Runs as root on a systemd timer (~5 min). The repo is the SINGLE SOURCE OF
+# TRUTH: when the starter templates' .claude/skills/ or news/ change on main,
+# this fast-forwards the on-box checkout and MIRRORS them into every seeded
+# user's home — overwriting local changes and removing what upstream deleted.
+#
+#   skills:  user-templates/<tmpl>/.claude/skills/ -> ~/.claude/skills/
+#   news:    user-templates/<tmpl>/news/           -> ~/.go-jupyter/news/
+#
+# News is how we tell curators something changed. It is shown
+# by the welcome banner at each session start, but only when it has changed
+# since that user last saw it. Publishing an announcement is therefore: edit
+# news/NEWS.md, open a PR, merge — live in every home within ~5 minutes, with
+# no operator step and NO hub restart (a restart would terminate every running
+# session, which is the opposite of a good way to deliver a notice).
+#
+# DESIGN — deliberately dumb.
+#
+#   * HARD MIRROR. ~/.claude/skills/<skill>/ is template-owned and is NOT a user
+#     editing surface. `rsync --delete` makes each home match the template
+#     exactly, so upstream deletions land and stale files never accumulate.
+#
+#     Divergence detection (skip "locally modified" homes) is deliberately
+#     avoided: an upstream deletion leaves stale files that read as local
+#     modifications, which would silently skip the user. Dumb-and-predictable
+#     beats clever-and-silent.
+#
+#   * NEVER DESTRUCTIVE. Anything overwritten or removed is preserved under
+#     ~user/.go-jupyter/refresh-backups/<timestamp>/.
+#
+#   * EXPLICIT ESCAPE HATCH. `touch ~/.go-jupyter/hold-skills` makes this skip
+#     that user (and log it) — a visible opt-out for a curator testing an edit in
+#     place. Delete the file to resume. Explicit beats implicit divergence
+#     detection: a hold is something a human chose and can see.
+#
+#   * NO HUB RESTART. Skills load at each user's next `claude` launch.
+#
+# Personal notes and preferences do NOT belong in ~/.claude/skills/ (it is
+# mirrored away). Use ~/.claude/CLAUDE.md — Claude Code's user-level layer, which
+# is never synced and already layers on top of the skills — or anywhere else in
+# $HOME.
+#
+# Usage: go-jupyter-sync-skills [--force]
+#   --force   mirror the current template to users now, regardless of whether git
+#             reports a skills/news change (re-baseline / operator override).
+#
+set -euo pipefail
+
+REPO=/opt/go-jupyter
+SKILL_PATHSPEC='user-templates/*/.claude/skills/'
+NEWS_PATHSPEC='user-templates/*/news/'
+FORCE=0
+[ "${1:-}" = "--force" ] && FORCE=1
+# `--` terminates logger's option parsing: without it a message that happens to
+# start with "--" is read as a flag and (under set -e) kills the run.
+log() { logger -t go-jupyter-sync-skills -- "$*"; }
+
+[ "$(id -u)" -eq 0 ] || { echo "must run as root (try: sudo $0 $*)" >&2; exit 1; }
+cd "$REPO" || { log "no $REPO checkout"; exit 0; }
+
+if [ "$FORCE" -eq 0 ]; then
+    git fetch -q origin main 2>/dev/null || { log "git fetch failed; skipping"; exit 0; }
+    OLD="$(git rev-parse HEAD)"
+    NEW="$(git rev-parse origin/main)"
+    [ "$OLD" = "$NEW" ] && exit 0
+    if git diff --quiet "$OLD" "$NEW" -- $SKILL_PATHSPEC \
+       && git diff --quiet "$OLD" "$NEW" -- $NEWS_PATHSPEC; then
+        exit 0
+    fi
+    git merge --ff-only -q origin/main || { log "ff-only merge failed (drift in $REPO?); skipping"; exit 0; }
+    log "skills/news changed ${OLD:0:7}->${NEW:0:7}; mirroring to users"
+else
+    log "forced mirror of current template ($(git rev-parse --short HEAD)) to users"
+fi
+
+TS="$(date +%Y-%m-%dT%H%M%S)"
+mirrored=0
+held=0
+while IFS=: read -r name _ uid _ _ home _; do
+    [ "${uid:-0}" -ge 1000 ] 2>/dev/null || continue
+    case "$name" in ubuntu | nobody) continue ;; esac
+    [ -f "$home/.seeded" ] || continue
+
+    if [ -e "$home/.go-jupyter/hold-skills" ]; then
+        log "hold $name (hold-skills present — leaving skills untouched)"
+        held=$((held + 1))
+        continue
+    fi
+
+    tmpl="$(head -n1 "$home/.seeded" 2>/dev/null | tr -d '[:space:]')"
+    [ -n "$tmpl" ] || tmpl=researcher
+    src="$REPO/user-templates/$tmpl/.claude/skills"
+    [ -d "$src" ] || continue
+
+    dst="$home/.claude/skills"
+    bk="$home/.go-jupyter/refresh-backups/$TS/.claude/skills"
+    mkdir -p "$dst" "$bk"
+    rsync -a --delete --backup --backup-dir="$bk" "$src/" "$dst/"
+    chown -R "$name:$name" "$dst" "$home/.go-jupyter"
+
+    # News — same hard-mirror contract as skills. The per-user "have they seen
+    # this yet" marker deliberately lives OUTSIDE this directory
+    # (~/.go-jupyter/news-seen), because --delete would otherwise wipe it on
+    # every sync and every user would be re-shown the same announcement.
+    news_src="$REPO/user-templates/$tmpl/news"
+    if [ -d "$news_src" ]; then
+        news_dst="$home/.go-jupyter/news"
+        mkdir -p "$news_dst"
+        rsync -a --delete "$news_src/" "$news_dst/"
+        chown -R "$name:$name" "$news_dst"
+    fi
+    # Drop the backup tree again if this run superseded nothing.
+    find "$home/.go-jupyter/refresh-backups/$TS" -type d -empty -delete 2>/dev/null || true
+    mirrored=$((mirrored + 1))
+done < <(getent passwd)
+
+log "mirror done: users=$mirrored held=$held"

@@ -1,0 +1,12 @@
+{
+    "mcpServers": {
+        "ols": {
+            "type": "stdio",
+            "command": "uvx",
+            "args": [
+                "ols-mcp"
+            ],
+            "env": {}
+        }
+    }
+}

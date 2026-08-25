@@ -1,0 +1,12 @@
+Use this to record progress  through the tutorial
+---
+
+Check off items:
+
+- Exercise 01 [ ]
+- Exercise 02 [ ]
+- ...
+
+
+
+Additional things learned:

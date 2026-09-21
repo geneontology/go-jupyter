@@ -78,10 +78,16 @@ if backend_name not in BACKENDS:
 BACKENDS[backend_name](env)
 
 # Common Claude Code env (backend-independent).
-env['DISABLE_NON_ESSENTIAL_MODEL_CALLS'] = '1'
 env['DISABLE_TELEMETRY'] = '1'
 env['DISABLE_AUTOUPDATER'] = '1'
-env['CLAUDE_CODE_MAX_OUTPUT_TOKENS'] = '8192'
+
+# Output-token cap (optional). Unset by default so Claude Code uses each
+# model's own default; the cap also bounds thinking, so a low value degrades
+# the agent (#40). To cap it anyway (e.g. for cost), set
+# CLAUDE_CODE_MAX_OUTPUT_TOKENS in /etc/default/go-jupyter and restart the hub.
+_max_output = os.environ.get('CLAUDE_CODE_MAX_OUTPUT_TOKENS', '').strip()
+if _max_output:
+    env['CLAUDE_CODE_MAX_OUTPUT_TOKENS'] = _max_output
 
 # Reduce scrollbar reset issues in xterm.js/JupyterLab terminals.
 # See: anthropics/claude-code#36128, #34845, #34400

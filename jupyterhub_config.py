@@ -41,10 +41,13 @@ def _anthropic_backend(env):
         return
     with open(ANTHROPIC_API_KEY_FILE) as f:
         env['ANTHROPIC_API_KEY'] = f.read().strip()
-    # Primary model. The availability fallback chain (Opus 5) lives in
+    # Primary model: the 'fable' alias, which Claude Code resolves to the
+    # current Fable release on the Anthropic API (so upgrading Claude Code on
+    # the box moves users to newer Fable models without a config change). The
+    # availability fallback chain ('opus' alias) lives in
     # /etc/claude-code/managed-settings.json (see terraform/user_data.sh.tpl);
     # Claude Code's content-based fallback from Fable is automatic.
-    env['ANTHROPIC_MODEL'] = 'claude-fable-5-1'
+    env['ANTHROPIC_MODEL'] = 'fable'
     env['ANTHROPIC_SMALL_FAST_MODEL'] = 'claude-haiku-4-5'
     env['CLAUDE_CODE_SUBAGENT_MODEL'] = 'claude-haiku-4-5'
 

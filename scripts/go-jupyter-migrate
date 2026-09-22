@@ -24,6 +24,11 @@
 #     collisions and rsync --numeric-ids lands ownership with zero re-chown.
 #   * You need ssh to the old box as 'ubuntu' (the go-jupyter key), and 'ubuntu'
 #     there must have passwordless sudo (default on Ubuntu cloud AMIs).
+#     The key need not be copied onto this box: connect with agent forwarding
+#     (`ssh -A ... ubuntu@<new-box>`) and run
+#     `sudo --preserve-env=SSH_AUTH_SOCK go-jupyter-migrate <old-host>`;
+#     root can use the forwarded agent socket, so no [ssh-key] argument is
+#     needed and nothing secret is staged remotely.
 #
 # ASSUMPTIONS
 #   * Accounts were created by useradd -m (per-user primary group, name==user).
@@ -148,8 +153,17 @@ fi
 say "done"
 cat <<'MSG'
 Next steps:
+  * go-jupyter-refresh-user --all    # the rsync brought the OLD box's copies of
+                                     # template-owned files (skills, CLAUDE.md,
+                                     # .bashrc) over this box's seeded ones
   * systemctl restart jupyterhub     # pick up the migrated PAM allowlist
-  * cut the Elastic IP over to this instance via Terraform (the one
-    AWS-state-changing step) so the public hostname now points here.
+  * if the old box stayed in use: stop its hub (ends every session there),
+    re-run this script for the final delta, then refresh-user --all again
+  * cut over: fronting=direct -> repoint the Route53 A record via Terraform;
+    fronting=cloudflare -> repoint the CDN-side origin A record to this
+    instance's EIP (out-of-band). Established WebSockets to the old box
+    survive the repoint; check for live single-user servers before teardown,
+    and do not blanket-rsync from the old box after the repoint (it would
+    overwrite files written here since).
 Backups of the pre-migration passwd/group/shadow are at /etc/*.migrate.bak
 MSG

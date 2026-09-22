@@ -2,6 +2,11 @@
 # paths to your credentials and, if you use local_users, plaintext passwords).
 
 region              = "us-east-1"
+# Name tags of the existing VPC and public subnet to deploy into. The defaults
+# are "default"; an account whose VPC/subnet carry other Name tags fails at plan
+# time with "no matching EC2 VPC found" (GO production uses "go-production").
+# vpc_name_tag    = "go-production"
+# subnet_name_tag = "go-production"
 environment         = "test" # short label; combined with a random suffix into the Deployment tag
 instance_type       = "t3.large"
 root_volume_size_gb = 100

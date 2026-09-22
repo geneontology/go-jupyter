@@ -30,6 +30,18 @@ this file for the operating rules.
   user's `/home` (there is no standing backup). Changing `user_data` / `git_ref`
   / a token / the hostname forces replacement — read the plan. Port users with
   `scripts/go-jupyter-migrate` before a deliberate rebuild.
+- **First boot writes things `go-jupyter-update` never touches.** The helpers
+  in `/usr/local/sbin`, the systemd units, `/etc/claude-code/managed-settings.json`
+  and the global Claude Code npm install are all written by cloud-init once.
+  `go-jupyter-update` pulls the repo and restarts the hub; it does not reinstall
+  any of them. To change one on a running box, change it in the repo *and* put
+  the file in place by hand. After any edit to `user_data.sh.tpl`, `terraform
+  plan` proposes replacing the instance; that is expected, and not a reason to
+  apply it.
+- **Apply only what you have read.** `terraform plan -out=<file>` first, then
+  `terraform apply <file>` as a separate step; never `-auto-approve`, and never
+  chain plan and apply in one command. A plan that destroys anything is a
+  decision for the operator, not a detail to scroll past.
 - **Workshop mode is an explicit choice, not a default to leave unexamined.**
   The shipped config runs Claude Code with `--dangerously-skip-permissions` and a
   shared backend key so non-technical curators aren't blocked mid-task. That is
@@ -46,3 +58,12 @@ Claude Code talks to either the first-party Claude API (`backend = "anthropic"`,
 using an API key file) or Anthropic models on Vertex AI (`backend = "vertex"`,
 using a GCP service-account key). The choice is written to
 `/etc/default/go-jupyter` and can be flipped in place with a hub restart.
+
+Model policy (2026-09-22): sessions get `ANTHROPIC_MODEL=fable` and the managed
+setting `fallbackModel: ["opus"]`, Claude Code's aliases for the current Fable
+and Opus releases, so no model ID is pinned in the repo. Claude Code resolves
+the aliases per version, which makes `go-jupyter-update-claude` (hourly timer,
+newest npm release at least two days old, idle-gated, frozen by
+`/etc/go-jupyter/hold-claude`) the path by which curators reach newer models.
+Fable's content-based fallback to Opus is built into Claude Code and needs no
+configuration.

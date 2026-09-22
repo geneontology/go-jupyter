@@ -1,0 +1,13 @@
+[Unit]
+Description=go-jupyter: update the global Claude Code install (publish-delayed, idle-gated)
+Documentation=https://github.com/geneontology/go-jupyter/issues/39
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/go-jupyter-update-claude
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Best-effort: a skipped or failed tick is logged and retried on the next one.
+Nice=10
+IOSchedulingClass=idle

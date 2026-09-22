@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+#
+# go-jupyter-update-claude — keep the box's global Claude Code install current,
+# semi-automatically (geneontology/go-jupyter#39).
+#
+# Runs as root on a systemd timer (hourly). Claude Code is installed once by
+# cloud-init with `npm install -g @anthropic-ai/claude-code` and its own
+# auto-updater is disabled (DISABLE_AUTOUPDATER=1 + managed autoUpdatesDisabled):
+# users cannot write to the global node_modules, and the per-user updater would
+# give every curator a private copy under ~/.local. So the global install only
+# moves when this script moves it.
+#
+# POLICY
+#   * PUBLISH DELAY. Only versions that have been on npm for at least
+#     DELAY_DAYS (default 2) are candidates, so a bad release has time to be
+#     pulled or superseded before it reaches curators. The newest eligible
+#     version wins; the `latest` dist-tag is never trusted on its own.
+#   * IDLE GATE. The update runs only when every running `claude` process is
+#     idle (near-zero CPU over a short sample). A live-but-idle session is not a
+#     blocker: the on-disk bundle is swapped underneath it and it keeps running
+#     the old code; the user gets the new version at their next `claude`
+#     launch. A session mid-turn makes this tick skip; the next tick retries.
+#   * HOLD FILE. `touch /etc/go-jupyter/hold-claude` freezes updates (during a
+#     workshop, or to sit out a bad release). Remove it to resume. Logged.
+#   * NEVER DOWNGRADES. If the installed version is newer than the newest
+#     eligible one (an operator ran `npm install -g` by hand), nothing happens.
+#   * MODEL POLICY COUPLING. ANTHROPIC_MODEL and fallbackModel use the `fable`
+#     and `opus` aliases, which Claude Code resolves per version, so an update
+#     here can also move curators to newer models. That is intended.
+#
+# Every decision except a quiet no-op is logged to the journal (tag
+# go-jupyter-update-claude); each applied update is also appended to
+# /var/log/go-jupyter-claude-updates.log.
+#
+# Usage: go-jupyter-update-claude [--dry-run] [--force] [--delay-days N]
+#   --dry-run       decide and report, install nothing
+#   --force         ignore the hold file and the idle gate (not the delay)
+#   --delay-days N  override the publish delay (0 = newest release right now)
+set -euo pipefail
+
+PKG=@anthropic-ai/claude-code
+HOLD=/etc/go-jupyter/hold-claude
+LOGFILE=/var/log/go-jupyter-claude-updates.log
+DELAY_DAYS=2
+DRY=0
+FORCE=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run) DRY=1 ;;
+        --force) FORCE=1 ;;
+        --delay-days) DELAY_DAYS="${2:?--delay-days needs a number}"; shift ;;
+        *) echo "unknown argument: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+log() {
+    logger -t go-jupyter-update-claude -- "$*"
+    if [ -t 1 ] || [ "$DRY" -eq 1 ]; then echo "$*"; fi
+}
+
+[ "$(id -u)" -eq 0 ] || { echo "must run as root (try: sudo $0 $*)" >&2; exit 1; }
+
+if [ -e "$HOLD" ] && [ "$FORCE" -eq 0 ]; then
+    log "hold: $HOLD present; not updating"
+    exit 0
+fi
+
+ROOT="$(npm root -g)"
+CUR="$(node -p "require('$ROOT/$PKG/package.json').version" 2>/dev/null || echo unknown)"
+
+# One npm query gives both the published version list and each version's
+# publish time. A version missing from `versions` (unpublished) is never a
+# candidate even if it still has a timestamp.
+META="$(npm view "$PKG" versions time --json 2>/dev/null)" \
+    || { log "npm view $PKG failed (offline?); skipping"; exit 0; }
+CAND="$(printf '%s' "$META" | python3 -c '
+import sys, json, re, datetime as dt
+d = json.load(sys.stdin)
+published = set(d.get("versions") or [])
+times = d.get("time") or {}
+cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=float(sys.argv[1]))
+ok = []
+for v, ts in times.items():
+    if v not in published or not re.fullmatch(r"\d+\.\d+\.\d+", v):
+        continue  # prereleases, tags and unpublished versions never qualify
+    if dt.datetime.fromisoformat(ts.replace("Z", "+00:00")) <= cutoff:
+        ok.append(tuple(int(x) for x in v.split(".")))
+print(".".join(map(str, max(ok))) if ok else "")
+' "$DELAY_DAYS")"
+
+if [ -z "$CAND" ]; then
+    log "no $PKG release is at least ${DELAY_DAYS}d old; skipping"
+    exit 0
+fi
+if [ "$CAND" = "$CUR" ]; then
+    # Quiet no-op on the hourly tick; say so only when asked.
+    [ "$DRY" -eq 0 ] || log "already on the newest eligible release ($CUR)"
+    exit 0
+fi
+if [ "$CUR" != unknown ] \
+   && [ "$(printf '%s\n%s\n' "$CUR" "$CAND" | sort -V | tail -n1)" = "$CUR" ]; then
+    log "installed $CUR is newer than the newest eligible $CAND; leaving it"
+    exit 0
+fi
+
+# Idle gate: sample utime+stime of every claude process over 10 s. An idle
+# session accrues 0-2 ticks; a model turn burns dozens.
+if [ "$FORCE" -eq 0 ]; then
+    declare -A t0=()
+    for p in $(pgrep -x claude || true); do
+        t0[$p]="$(awk '{print $14 + $15}' "/proc/$p/stat" 2>/dev/null || echo 0)"
+    done
+    if [ "${#t0[@]}" -gt 0 ]; then
+        sleep 10
+        for p in "${!t0[@]}"; do
+            t1="$(awk '{print $14 + $15}' "/proc/$p/stat" 2>/dev/null || echo 0)"
+            if [ $((t1 - t0[$p])) -gt 5 ]; then
+                log "claude pid $p is mid-turn; deferring $CUR -> $CAND to the next tick"
+                exit 0
+            fi
+        done
+    fi
+fi
+
+if [ "$DRY" -eq 1 ]; then
+    log "dry-run: would update $PKG $CUR -> $CAND (publish delay ${DELAY_DAYS}d)"
+    exit 0
+fi
+
+log "updating $PKG $CUR -> $CAND"
+NPMLOG="$(mktemp /tmp/go-jupyter-update-claude.XXXXXX)"
+if ! npm install -g --no-fund --no-audit "$PKG@$CAND" >"$NPMLOG" 2>&1; then
+    log "npm install failed; $CUR left in place; see $NPMLOG"
+    exit 1
+fi
+rm -f "$NPMLOG"
+NEW="$(node -p "require('$ROOT/$PKG/package.json').version" 2>/dev/null || echo unknown)"
+if [ "$NEW" != "$CAND" ] || ! claude --version >/dev/null 2>&1; then
+    log "post-install check FAILED: have '$NEW', wanted $CAND, or claude does not run"
+    exit 1
+fi
+echo "$(date -u +%FT%TZ) $CUR -> $NEW" >>"$LOGFILE"
+log "updated $PKG $CUR -> $NEW; running sessions keep the old code until their next launch"

@@ -41,7 +41,10 @@ def _anthropic_backend(env):
         return
     with open(ANTHROPIC_API_KEY_FILE) as f:
         env['ANTHROPIC_API_KEY'] = f.read().strip()
-    env['ANTHROPIC_MODEL'] = 'claude-opus-4-8'
+    # Primary model. The availability fallback chain (Opus 5) lives in
+    # /etc/claude-code/managed-settings.json (see terraform/user_data.sh.tpl);
+    # Claude Code's content-based fallback from Fable is automatic.
+    env['ANTHROPIC_MODEL'] = 'claude-fable-5-1'
     env['ANTHROPIC_SMALL_FAST_MODEL'] = 'claude-haiku-4-5'
     env['CLAUDE_CODE_SUBAGENT_MODEL'] = 'claude-haiku-4-5'
 

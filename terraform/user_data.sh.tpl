@@ -348,6 +348,17 @@ install -m 0644 "$REPO_DIR/systemd/go-jupyter-sync-skills.timer" /etc/systemd/sy
 systemctl daemon-reload
 systemctl enable --now go-jupyter-sync-skills.timer
 
+# Semi-automatic Claude Code updates (go-jupyter#39): an hourly timer installs
+# the newest npm release that has been published for >= 2 days, only while no
+# curator session is mid-turn. Freeze with `touch /etc/go-jupyter/hold-claude`.
+# With the fable/opus model aliases, this is also how curators reach newer models.
+install -m 0755 "$REPO_DIR/scripts/go-jupyter-update-claude" /usr/local/sbin/go-jupyter-update-claude
+install -m 0644 "$REPO_DIR/systemd/go-jupyter-update-claude.service" /etc/systemd/system/go-jupyter-update-claude.service
+install -m 0644 "$REPO_DIR/systemd/go-jupyter-update-claude.timer" /etc/systemd/system/go-jupyter-update-claude.timer
+mkdir -p /etc/go-jupyter
+systemctl daemon-reload
+systemctl enable --now go-jupyter-update-claude.timer
+
 # Caddy: TLS termination + reverse proxy to JupyterHub on localhost:8000.
 # The cloudsmith repo is the official Caddy apt source.
 apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl

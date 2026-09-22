@@ -1,0 +1,16 @@
+[Unit]
+Description=go-jupyter: hourly check for a Claude Code update
+Documentation=https://github.com/geneontology/go-jupyter/issues/39
+
+[Timer]
+# Hourly. A no-op tick is one `npm view` (a few KB from the npm registry). The
+# install itself runs only for a release that has been on npm for >= 2 days and
+# only while no curator session is mid-turn; see the script header for the
+# policy and the hold file that freezes it.
+OnBootSec=15min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

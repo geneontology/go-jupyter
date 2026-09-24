@@ -172,8 +172,34 @@ Two rules follow:
   pending. It must be rebuilt.
 
 **The durable save is the go-cam-drop-box** — see the `/save-to-drop-box` skill.
-A model does **not** need to be on noctua-dev at all to be submitted there; the
-drop-box skill can write the YAML directly from work done here.
+Since 2026-09-24 a submission is the model in **two formats under its dev id**
+(gocam-py YAML + minerva TTL), both exported from the **same stored state** of
+the model on noctua-dev. So a model **must** exist on noctua-dev, be **stored**
+there, and be in `production` state before it can be submitted; nothing can be
+submitted from notes or a hand-written YAML.
+
+### Store, state, comments, export
+
+- **Store** after meaningful work and always before exporting. An unstored model
+  lives only in minerva's memory and is gone at the next dev restart (this has
+  cost curators finished models). Store with the minerva `store` operation and
+  verify `"modified-p": false` afterwards — the exact commands are in
+  `/save-to-drop-box`, step 2.
+- **State and comments are model annotations**, set on dev:
+  `barista update-metadata --model <id> --state production` and
+  `barista update-metadata --model <id> --add --comment "..."`. Never add
+  comments to an exported YAML by hand; CI compares YAML and TTL comments.
+- **Export both files back to back** from the stored state (`/save-to-drop-box`,
+  step 3). Any later edit means store + re-export both again.
+
+### Evidence hygiene
+
+When you remove evidence from an edge (`remove-annotation` of an `evidence`
+value, or deleting/re-adding an edge), also **delete the evidence individual**
+(`barista delete-individual`). Evidence individuals that no axiom references are
+"disconnected individuals"; production's QC battery flags them and the drop-box
+CI now rejects them. Likewise avoid attaching evidence to the same edge twice as
+separate axioms.
 
 ### Offer the durable save — don't force it
 

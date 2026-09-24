@@ -1,63 +1,91 @@
 ---
 name: save-to-drop-box
-description: Save a GO-CAM model the user has been working on to the public geneontology/go-cam-drop-box repository as a pull request. Use when the user asks to "save", "submit", "publish", or "keep" a model so it can be reviewed and (later) promoted into GO-CAM. The model must be complete and production-worthy.
+description: Save a finished GO-CAM model to the public geneontology/go-cam-drop-box repository as a pull request carrying the model in both formats (gocam-py YAML + minerva TTL) under its noctua-dev id. Use when the user asks to "save", "submit", "publish", or "keep" a model so it can be reviewed and promoted into production GO-CAM. The model must exist on noctua-dev, be stored there, and be production-worthy.
 ---
 
 # Save a model to the GO-CAM drop box
 
 This skill submits one finished GO-CAM model to
-**https://github.com/geneontology/go-cam-drop-box** as a pull request. That
-repo's CI validates every submission; a maintainer merges. This is how a
-curator "saves" work from this environment so it survives and can flow toward
-production.
+**https://github.com/geneontology/go-cam-drop-box** as a pull request. CI
+validates every submission; a maintainer merges; merged models are copied into
+production `noctua-models` at the next Noctua maintenance outage. This is how a
+curator "saves" work from this environment so it survives and reaches production.
 
-Read the drop box's own contract for the authoritative rules (fetch
+The drop box's own `CLAUDE.md` is the authoritative contract (fetch
 `https://raw.githubusercontent.com/geneontology/go-cam-drop-box/main/CLAUDE.md`
 if unsure). The essentials are below.
 
-## The contract
+## The contract (since 2026-09-24): one model, two files, one id
 
-- **Format:** the model is a **gocam-py GO-CAM YAML** file.
-- **Id:** top-level `id: gomodel:gcdb-<UUID>`. Mint a fresh one:
-  ```sh
-  python3 -c "import uuid; print(f'gcdb-{uuid.uuid4()}')"
-  ```
-  Never reuse an existing id. Activity ids under the model take the form
-  `gomodel:gcdb-<UUID>/<local-id>`.
-- **Filename:** `models/gcdb-<UUID>.yaml` — the filename must match the id.
-- **Must be complete and production-worthy.** CI enforces (strictly, for now):
-  `status: production`, a connected causal graph (≥1 causal relationship, no
-  disconnected activity), evidence on assertions, and every ontology term
-  (GO/RO/ECO/CHEBI/…) real and non-obsolete. Half-finished experiments will be
-  rejected — don't submit them.
+- **The model lives on noctua-dev.** Its id is the one minerva minted there,
+  e.g. `gomodel:6ab067da00000569`. That id is permanent: it is the id in both
+  files, the filename of both files, and the production id after promotion.
+  **Do not mint or rewrite ids** (the old `gcdb-<UUID>` scheme is retired).
+- **The model is stored on dev** (step 2 below) and its state is `production`.
+- **Two files, exported from that same stored state:**
+  `models/<id>.yaml` (gocam-py YAML) and `models/<id>.ttl` (minerva's own
+  Turtle). The YAML is the review surface; the TTL is what enters production.
+  CI checks that they agree exactly, so **never hand-edit either file** —
+  change the model on dev and re-export both.
+- **Production-worthy.** CI enforces: `production` state, a connected causal
+  graph (≥1 causal edge, no orphan activity), evidence on assertions, real and
+  current ontology terms, and the noctua-models QC battery over the TTL (no
+  disconnected individuals such as orphaned evidence, no multiply reified edges).
 
-## Step 1 — produce the model as gocam YAML
+A model that exists only as notes or a YAML draft here cannot be submitted:
+build it on noctua-dev first (the `noctua` skill), then come back.
 
-Two ways, whichever fits what the curator has:
+## Step 0 — confirm the model is on dev
 
-- **Author it directly.** If the model exists as reasoning/notes/a draft here,
-  write it out as gocam-py YAML following the schema and the drop box's
-  `examples/`. This is usually the simplest path.
-- **Export a Noctua dev-server model.** If they built it on the dev server,
-  fetch its minerva JSON (via the `noctua` skill / barista) and convert with
-  gocam-py:
-  ```python
-  from gocam.translation import MinervaWrapper
-  model = MinervaWrapper.minerva_object_to_model(minerva_json)
-  ```
-  then serialize `model.model_dump(exclude_none=True)` to YAML.
+```sh
+set -a; [ -f ~/.env ] && . ~/.env; set +a      # BARISTA_TOKEN
+barista get-model --model <id>                  # must succeed; note the title
+```
 
-Set the top-level `id` to `gomodel:gcdb-<UUID>`, `status: production`, and save
-it as `gcdb-<UUID>.yaml`.
+## Step 1 — finish it on dev: comments and state
 
-## Step 2 — sanity-check before submitting
+Anything that should travel with the model goes on the model, as annotations:
 
-Do a quick local check so the PR isn't obviously red (CI runs the full,
-authoritative validation). Confirm: `id` matches the filename; `status:
-production`; at least one activity with a `causal_associations` edge and no
-orphan activity; evidence present; and you did not invent any ontology term.
+```sh
+barista update-metadata --model <id> --add --comment "Curated with GO AI HUB. <one line on what the model represents>"
+barista update-metadata --model <id> --state production
+```
 
-## Step 3 — authenticate gh (once per user)
+Fix anything else on dev too (the `noctua` skill). If you removed evidence from
+an edge, delete the evidence individual as well; orphaned evidence fails CI.
+
+## Step 2 — store the model on dev
+
+An unstored model exists only in minerva's memory and is lost at the next dev
+restart. Store it, then verify the store took:
+
+```sh
+curl -s -X POST "http://barista-dev.berkeleybop.org/api/minerva_public_dev/m3BatchPrivileged" \
+  --data-urlencode "token=$BARISTA_TOKEN" --data-urlencode "intention=action" \
+  --data-urlencode "provided-by=http://geneontology.org" \
+  --data-urlencode 'requests=[{"entity":"model","operation":"store","arguments":{"model-id":"gomodel:<id>"}}]' \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["message-type"], d.get("message"))'
+# expect: success ...
+barista get-model --model <id> | grep -o '"modified-p": *[a-z]*'      # expect: "modified-p": false
+```
+
+## Step 3 — export both files from that state
+
+```sh
+mkdir -p ~/drop-box-out && cd ~/drop-box-out
+barista export-model --model <id> -f gocam-yaml -o <id>.yaml
+curl -s -X POST "http://barista-dev.berkeleybop.org/api/minerva_public_dev/m3Batch" \
+  --data-urlencode 'requests=[{"entity":"model","operation":"export","arguments":{"model-id":"gomodel:<id>"}}]' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["export-model"])' > <id>.ttl
+head -c 300 <id>.ttl            # Turtle, ontology IRI http://model.geneontology.org/<id>
+grep -m1 '^id:' <id>.yaml       # id: gomodel:<id>
+grep -m1 '^status:' <id>.yaml   # status: production
+```
+
+Do both exports back to back, after the store, with no edits in between. If you
+edit the model afterwards, repeat steps 2 and 3.
+
+## Step 4 — authenticate gh (once per user)
 
 The PR is opened as the curator, so `gh` must be logged in as them.
 
@@ -72,71 +100,72 @@ already in a browser — JupyterLab — so this is just a new tab):
 gh auth login --hostname github.com --git-protocol https --web
 ```
 
-This prints a one-time code (e.g. `AB12-CD34`) and the URL
-`https://github.com/login/device`. Tell the curator: *"Open
-https://github.com/login/device in a new browser tab, enter this code: `…`, and
-authorize."* Wait for them to finish, then re-check `gh auth status`. It only
-has to be done once — the login persists in `~/.config/gh`.
+Tell the curator: *"Open https://github.com/login/device in a new browser tab,
+enter this code: `…`, and authorize."* Wait, then re-check `gh auth status`.
+The login persists in `~/.config/gh`. Only GitHub GO-organization members can
+submit.
 
-Only GitHub organization members can submit; if the curator isn't a GO-org
-member, their PR won't be accepted.
-
-## Step 4 — fork, add, and open the PR
+## Step 5 — fork, add both files, open the PR
 
 ```sh
 gh repo fork geneontology/go-cam-drop-box --clone --remote --default-branch-only
 cd go-cam-drop-box
-git checkout -b add-gcdb-<UUID>
-cp <path-to-your-model>.yaml models/gcdb-<UUID>.yaml
-git add models/gcdb-<UUID>.yaml
-git commit -m "Add gcdb-<UUID>"
-git push -u origin add-gcdb-<UUID>
+git checkout -b add-<id>
+cp ~/drop-box-out/<id>.yaml ~/drop-box-out/<id>.ttl models/
+git add models/<id>.yaml models/<id>.ttl
+git commit -m "Add <id> (<short title>)"
+git push -u origin add-<id>
 gh pr create --repo geneontology/go-cam-drop-box \
-  --title "Add model gcdb-<UUID>" \
-  --body "Brief description of what this model represents."
+  --title "Add model <id> (<short title>)" \
+  --body "What the model represents, in a few lines. Built and stored on noctua-dev as gomodel:<id>; YAML and TTL exported from the same stored state."
 ```
 
-## Step 5 — watch CI and fix if needed
+## Step 6 — watch CI and fix if needed
 
-The `validate` check must pass before merge. Check it and, if red, read the
-failure and fix the model, then push again to the same branch:
+The `validate` check must pass before merge:
 
 ```sh
 gh pr checks --repo geneontology/go-cam-drop-box <pr-number>
-# on failure:
-gh run view --repo geneontology/go-cam-drop-box <run-id> --log-failed
+gh run view --repo geneontology/go-cam-drop-box <run-id> --log-failed     # on failure
 ```
 
-Common failures map to the four gates: bad `gcdb-` id / filename mismatch;
-LinkML schema violation; not production-worthy (status, connectivity,
-evidence); or an ontology term that doesn't exist or is obsolete. Fix and
-re-push until the check is green, then hand the curator the PR URL and let them
-know a maintainer will review and merge.
+Failures map to the seven gates. **Every fix is made on dev, then both files
+are re-exported (steps 2–3) and pushed to the same branch.** Common ones:
 
-## What "submitted" and "merged" mean
+| CI says | Do on dev |
+|---|---|
+| id/filename mismatch | you renamed something; the id is the dev id, both filenames are `<id>.*` |
+| `status 'development' not in allowed_statuses` / TTL state != YAML status | `barista update-metadata --model <id> --state production`, store, re-export both |
+| model comments differ | comments were added to the YAML by hand; put them on the model with `update-metadata --add --comment`, re-export both |
+| YAML ↔ TTL agreement failures | the files came from different states; store, then re-export both back to back |
+| `check-disconnected-individuals.rq` rows | orphaned evidence (or other) individuals; delete them on dev, store, re-export |
+| `check-multiply-reified-edges.rq` rows | the same edge has evidence attached twice as separate axioms; remove the duplicate on dev |
+| LinkML / ontology-term failures | a term is wrong or obsolete; fix on dev |
 
-Tell the curator this when you hand over the PR — it's the difference between
-"my work is safe" and "my work is in limbo," and they should not have to guess:
+## What "submitted", "merged" and "promoted" mean
 
-- **Submitted (PR open)** — the model is production-ready and queued for **GO
-  Central review**. The work is **safe**; this is the durable save. Merging is a
-  manual editorial step by a GO Central maintainer, so an open PR is a normal
-  resting state, not a problem to chase.
-- **Merged** — accepted by GO Central; it will be available in a future release.
+Tell the curator this when you hand over the PR:
 
-Once merged, that drop-box entry is the **source of truth for that model ID**. It
-flows onward to production, and when it does it **clobbers** other copies —
-including anything edited on noctua-dev afterwards. So if the curator later
-changes a model that has already been submitted or merged, point that out and
-offer to carry the change back: update the open PR, or open a new PR if it was
-already merged. Otherwise their edit is silently overwritten downstream.
+- **Submitted (PR open)** — the model is production-ready and queued for GO
+  Central review. The work is **safe**; this is the durable save. An open PR is
+  a normal resting state.
+- **Merged** — accepted; it will be copied into production `noctua-models`,
+  under the same id, at the next Noctua maintenance outage (second and fourth
+  Thursdays). `PROMOTIONS.md` in the drop box records each batch.
+- **Promoted** — live in production Noctua under `gomodel:<id>`.
+
+Once merged, the drop box is the source of truth for that id until promotion,
+and production is after. Edits made on noctua-dev afterwards are **not**
+carried anywhere by themselves: if the curator changes a submitted or merged
+model, say so and offer to carry the change back (update the open PR, or open a
+new PR), or the edit is silently overwritten by the next dev refresh.
 
 ## Don't
 
-- Don't submit incomplete or experimental models — the gate is strict.
-- Don't reuse a `gomodel:` id or fabricate ontology terms.
-- Don't treat noctua-dev as a save, or imply a model is safe because it's on the
-  dev server — models there can be permanently lost. This drop box is the
-  durable save, and a model does not need to be on noctua-dev to be submitted.
-- Don't chase a merge or tell the curator something is wrong because their PR is
-  still open — review is manual and takes as long as it takes.
+- Don't submit a model that is not on noctua-dev, or not stored there.
+- Don't hand-edit the YAML or the TTL, and don't write a YAML from scratch.
+- Don't mint, reuse or rewrite `gomodel:` ids; don't fabricate ontology terms.
+- Don't treat noctua-dev itself as a save — unstored models vanish, and even
+  stored dev models are a proving ground, not production.
+- Don't chase a merge or tell the curator something is wrong because their PR
+  is still open; review is manual.

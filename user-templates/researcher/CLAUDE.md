@@ -44,9 +44,12 @@ Skills available:
 - **pubmed-eutils** — PubMed/literature search via NCBI E-utilities.
 - **uniprot-database** — UniProt REST: protein search, FASTA, ID mapping.
 - **save-to-drop-box** — submit a finished, production-worthy GO-CAM model to
-  the public `geneontology/go-cam-drop-box` repo as a pull request (CI-validated,
-  then a maintainer merges). Offer this when the user wants to "save", "keep",
-  or "submit" a completed model so it survives beyond this session.
+  the public `geneontology/go-cam-drop-box` repo as a pull request carrying the
+  model in both formats (gocam-py YAML + minerva TTL) under its noctua-dev id
+  (CI-validated, then a maintainer merges, then promoted to production at the
+  next Noctua outage). Offer this when the user wants to "save", "keep", or
+  "submit" a completed model so it survives beyond this session. The model must
+  be on noctua-dev and stored there first.
 
 MCPs available:
 - **OLS** — Ontology Lookup Service term search (GO, CHEBI, and other
@@ -73,8 +76,8 @@ straight with the user about it.
 |---|---|---|
 | `$HOME` on this box | your working space | until the box is rebuilt |
 | **noctua-dev** | a **proving ground** for building and testing | **no — models can vanish** |
-| **go-cam-drop-box, PR submitted** | production-ready, queued for GO Central review | **yes — this is the save** |
-| **go-cam-drop-box, merged** | accepted by GO Central; ships in a future release | yes, and it has landed |
+| **go-cam-drop-box, PR submitted** (YAML + TTL pair under the dev id) | production-ready, queued for GO Central review | **yes — this is the save** |
+| **go-cam-drop-box, merged** | accepted; copied into production `noctua-models` under the same id at the next Noctua outage | yes, and it has landed |
 
 Key points:
 
@@ -83,8 +86,9 @@ Key points:
   model as "indexing lag" — verify with `get-model` and report what you find.
 - **Submitting is finishing.** Once the PR is open, the curator's work is safe
   and queued — they are not in limbo waiting on anything.
-- **A model never has to touch noctua-dev** to be submitted; `/save-to-drop-box`
-  can write the YAML straight from work done here.
+- **A model must be on noctua-dev, stored, and in `production` state** to be
+  submitted; `/save-to-drop-box` exports the YAML and the TTL from that stored
+  state. Nothing is submitted from notes or a hand-written YAML.
 - **Merged = source of truth for that ID**, and it will overwrite other copies
   later. If the user edits something already submitted or merged, say so and
   offer to carry the change back into the drop box.

@@ -18,6 +18,9 @@ the YAML is what reviewers and CI read. Claude does the exports and the PR.
 - **Build on noctua-dev.** A model has to exist there and be **stored** before
   it can be saved. Ask Claude to store it; unstored work is lost when the dev
   server restarts. The model's state is yours to set; `development` is fine.
+- **Parking work in progress?** Say so, and Claude opens the PR as a *draft*:
+  saved and safe, but not up for merge until you say it is final. The model's
+  state stays whatever you set it to in Noctua.
 - **Edits go through dev.** If you change a model after submitting, tell Claude;
   it re-exports both files and updates the PR. Hand-edited files are refused.
 - **Your merged models now reach production.** Twelve drop-box models were

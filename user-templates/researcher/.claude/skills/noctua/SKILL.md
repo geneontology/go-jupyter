@@ -174,9 +174,10 @@ Two rules follow:
 **The durable save is the go-cam-drop-box** — see the `/save-to-drop-box` skill.
 Since 2026-09-24 a submission is the model in **two formats under its dev id**
 (gocam-py YAML + minerva TTL), both exported from the **same stored state** of
-the model on noctua-dev. So a model **must** exist on noctua-dev, be **stored**
-there, and be in `production` state before it can be submitted; nothing can be
-submitted from notes or a hand-written YAML.
+the model on noctua-dev. So a model **must** exist on noctua-dev and be
+**stored** there before it can be submitted; nothing can be submitted from
+notes or a hand-written YAML. Its state (`development`, `production`, ...) is
+the curator's call and travels as set.
 
 ### Store, state, comments, export
 
@@ -186,8 +187,8 @@ submitted from notes or a hand-written YAML.
   verify `"modified-p": false` afterwards — the exact commands are in
   `/save-to-drop-box`, step 2.
 - **State and comments are model annotations**, set on dev:
-  `barista update-metadata --model <id> --state production` and
-  `barista update-metadata --model <id> --add --comment "..."`. Never add
+  `barista update-metadata --model <id> --add --comment "..."` and, only when
+  the curator asks, `barista update-metadata --model <id> --state ...`. Never add
   comments to an exported YAML by hand; CI compares YAML and TTL comments.
 - **Export both files back to back** from the stored state (`/save-to-drop-box`,
   step 3). Any later edit means store + re-export both again.

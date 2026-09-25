@@ -125,6 +125,20 @@ gh pr create --repo geneontology/go-cam-drop-box \
   --body "What the model represents, in a few lines. Built and stored on noctua-dev as gomodel:<id>; YAML and TTL exported from the same stored state."
 ```
 
+**Not final yet? Open it as a draft.** If the curator says more curation is
+coming (a review meeting, additions planned, "just parking this"), add
+`--draft` to `gh pr create`. A draft is a real, safe save: CI runs on it and
+the files are in the drop box, but it is not a request for merge and nobody
+will merge it. When the curator says it is final:
+
+```sh
+gh pr ready --repo geneontology/go-cam-drop-box <pr-number>
+```
+
+Do **not** use the model's state to signal "not ready". State (`development`,
+`production`, ...) is the model's state in Noctua and travels as set; readiness
+for merge is the PR's draft flag.
+
 ## Step 6 — watch CI and fix if needed
 
 The `validate` check must pass before merge:
@@ -152,9 +166,11 @@ are re-exported (steps 2–3) and pushed to the same branch.** Common ones:
 
 Tell the curator this when you hand over the PR:
 
-- **Submitted (PR open)** — the model is complete and queued for GO Central
-  review. The work is **safe**; this is the durable save. An open PR is
-  a normal resting state.
+- **Draft PR open** — the work is **safe** in the drop box (this is the durable
+  save) but it is parked: not queued for review, and it will not be merged
+  until the curator marks it ready.
+- **PR ready for review** — the model is complete and queued for GO Central
+  review. An open PR is a normal resting state.
 - **Merged** — accepted; it will be copied into production `noctua-models`,
   under the same id, at the next Noctua maintenance outage (second and fourth
   Thursdays). `PROMOTIONS.md` in the drop box records each batch.
@@ -175,3 +191,5 @@ new PR), or the edit is silently overwritten by the next dev refresh.
   stored dev models are a proving ground, not production.
 - Don't chase a merge or tell the curator something is wrong because their PR
   is still open; review is manual.
+- Don't set a model to `development` (or anything else) as a way of saying
+  "not ready for merge"; open or convert the PR to a draft instead.

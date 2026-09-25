@@ -6,6 +6,28 @@ way.
 
 ---
 
+
+## 2026-09-24 — Saving to the drop box now sends two files, under the model's noctua-dev id
+
+**What changed.** A drop-box submission is now the model in two formats with one
+id: `<id>.yaml` (gocam-py YAML) and `<id>.ttl` (minerva's own Turtle), where
+`<id>` is the id noctua-dev gave the model. The TTL is what enters production;
+the YAML is what reviewers and CI read. Claude does the exports and the PR.
+
+**What it means for you.**
+- **Build on noctua-dev.** A model has to exist there, be **stored**, and be in
+  `production` state before it can be saved. Ask Claude to store it; unstored
+  work is lost when the dev server restarts.
+- **Edits go through dev.** If you change a model after submitting, tell Claude;
+  it re-exports both files and updates the PR. Hand-edited files are refused.
+- **Your merged models now reach production.** Twelve drop-box models were
+  copied into production Noctua at the 2026-09-24 maintenance outage, keeping
+  their ids. Future batches follow at the second and fourth Thursday outages;
+  the drop box's `PROMOTIONS.md` lists each one.
+- **CI is stricter in one useful way:** it now runs production's own QC checks
+  on the TTL, so orphaned evidence and duplicated evidence axioms are caught
+  before merge instead of after.
+
 ## Barista tokens: you use your own
 
 There is no shared barista token. The first time you work with Noctua in a

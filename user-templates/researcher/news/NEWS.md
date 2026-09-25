@@ -15,9 +15,9 @@ id: `<id>.yaml` (gocam-py YAML) and `<id>.ttl` (minerva's own Turtle), where
 the YAML is what reviewers and CI read. Claude does the exports and the PR.
 
 **What it means for you.**
-- **Build on noctua-dev.** A model has to exist there, be **stored**, and be in
-  `production` state before it can be saved. Ask Claude to store it; unstored
-  work is lost when the dev server restarts.
+- **Build on noctua-dev.** A model has to exist there and be **stored** before
+  it can be saved. Ask Claude to store it; unstored work is lost when the dev
+  server restarts. The model's state is yours to set; `development` is fine.
 - **Edits go through dev.** If you change a model after submitting, tell Claude;
   it re-exports both files and updates the PR. Hand-edited files are refused.
 - **Your merged models now reach production.** Twelve drop-box models were

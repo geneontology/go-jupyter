@@ -1,6 +1,6 @@
 ---
 name: save-to-drop-box
-description: Save a finished GO-CAM model to the public geneontology/go-cam-drop-box repository as a pull request carrying the model in both formats (gocam-py YAML + minerva TTL) under its noctua-dev id. Use when the user asks to "save", "submit", "publish", or "keep" a model so it can be reviewed and promoted into production GO-CAM. The model must exist on noctua-dev, be stored there, and be production-worthy.
+description: Save a finished GO-CAM model to the public geneontology/go-cam-drop-box repository as a pull request carrying the model in both formats (gocam-py YAML + minerva TTL) under its noctua-dev id. Use when the user asks to "save", "submit", "publish", or "keep" a model so it can be reviewed and promoted into production GO-CAM. The model must exist on noctua-dev and be stored there; its state is the curator's call.
 ---
 
 # Save a model to the GO-CAM drop box
@@ -21,16 +21,20 @@ if unsure). The essentials are below.
   e.g. `gomodel:6ab067da00000569`. That id is permanent: it is the id in both
   files, the filename of both files, and the production id after promotion.
   **Do not mint or rewrite ids** (the old `gcdb-<UUID>` scheme is retired).
-- **The model is stored on dev** (step 2 below) and its state is `production`.
+- **The model is stored on dev** (step 2 below). **Its state is the curator's
+  call** and travels as set on dev: `development` is fine, and there are good
+  reasons to keep a model there until it is promoted. Only `delete` is refused.
+  Change the state only if the curator asks.
 - **Two files, exported from that same stored state:**
   `models/<id>.yaml` (gocam-py YAML) and `models/<id>.ttl` (minerva's own
   Turtle). The YAML is the review surface; the TTL is what enters production.
   CI checks that they agree exactly, so **never hand-edit either file** —
   change the model on dev and re-export both.
-- **Production-worthy.** CI enforces: `production` state, a connected causal
-  graph (≥1 causal edge, no orphan activity), evidence on assertions, real and
-  current ontology terms, and the noctua-models QC battery over the TTL (no
-  disconnected individuals such as orphaned evidence, no multiply reified edges).
+- **Complete.** CI enforces: a connected causal graph (≥1 causal edge, no
+  orphan activity), evidence on assertions, real and current ontology terms,
+  the same state in both files, and the noctua-models QC battery over the TTL
+  (no disconnected individuals such as orphaned evidence, no multiply reified
+  edges).
 
 A model that exists only as notes or a YAML draft here cannot be submitted:
 build it on noctua-dev first (the `noctua` skill), then come back.
@@ -42,13 +46,14 @@ set -a; [ -f ~/.env ] && . ~/.env; set +a      # BARISTA_TOKEN
 barista get-model --model <id>                  # must succeed; note the title
 ```
 
-## Step 1 — finish it on dev: comments and state
+## Step 1 — finish it on dev: comments (and state, only if asked)
 
 Anything that should travel with the model goes on the model, as annotations:
 
 ```sh
 barista update-metadata --model <id> --add --comment "Curated with GO AI HUB. <one line on what the model represents>"
-barista update-metadata --model <id> --state production
+# state stays as the curator set it; change it only on their say-so, e.g.:
+# barista update-metadata --model <id> --state production
 ```
 
 Fix anything else on dev too (the `noctua` skill). If you removed evidence from
@@ -79,7 +84,7 @@ curl -s -X POST "http://barista-dev.berkeleybop.org/api/minerva_public_dev/m3Bat
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["export-model"])' > <id>.ttl
 head -c 300 <id>.ttl            # Turtle, ontology IRI http://model.geneontology.org/<id>
 grep -m1 '^id:' <id>.yaml       # id: gomodel:<id>
-grep -m1 '^status:' <id>.yaml   # status: production
+grep -m1 '^status:' <id>.yaml   # the curator's state, e.g. development
 ```
 
 Do both exports back to back, after the store, with no edits in between. If you
@@ -135,7 +140,8 @@ are re-exported (steps 2–3) and pushed to the same branch.** Common ones:
 | CI says | Do on dev |
 |---|---|
 | id/filename mismatch | you renamed something; the id is the dev id, both filenames are `<id>.*` |
-| `status 'development' not in allowed_statuses` / TTL state != YAML status | `barista update-metadata --model <id> --state production`, store, re-export both |
+| `status 'delete' not in allowed_statuses` | a deleted model cannot be submitted |
+| TTL state != YAML status | the files came from different states; store, then re-export both back to back |
 | model comments differ | comments were added to the YAML by hand; put them on the model with `update-metadata --add --comment`, re-export both |
 | YAML ↔ TTL agreement failures | the files came from different states; store, then re-export both back to back |
 | `check-disconnected-individuals.rq` rows | orphaned evidence (or other) individuals; delete them on dev, store, re-export |
@@ -146,8 +152,8 @@ are re-exported (steps 2–3) and pushed to the same branch.** Common ones:
 
 Tell the curator this when you hand over the PR:
 
-- **Submitted (PR open)** — the model is production-ready and queued for GO
-  Central review. The work is **safe**; this is the durable save. An open PR is
+- **Submitted (PR open)** — the model is complete and queued for GO Central
+  review. The work is **safe**; this is the durable save. An open PR is
   a normal resting state.
 - **Merged** — accepted; it will be copied into production `noctua-models`,
   under the same id, at the next Noctua maintenance outage (second and fourth

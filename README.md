@@ -10,6 +10,25 @@ own fork, domain, and templates and you have your own agent workshop box.
 This repository is public and self-contained. It contains **no secrets**: every
 credential is supplied out-of-band at deploy time (see [Secrets](#secrets)).
 
+## Background
+
+GO runs this as the **GO AI Hub**, a closed beta for GO curators at
+<https://jupyter.geneontology.io> (GitHub login, allowlisted from GO's
+`users.yaml`). Each curator gets a Unix account with JupyterLab, a terminal, and
+Claude Code preloaded with GO-CAM curation skills: Noctua access through
+barista, literature and protein lookups, GO-CAM best practice, and a save path
+that submits finished models to
+[`go-cam-drop-box`](https://github.com/geneontology/go-cam-drop-box) for review
+and promotion into production Noctua.
+
+The approach, the training modules, and the first four-hour workshop with 37
+curators are described in Carbon, Moxon, Van Auken, Gaudet and Mungall,
+*Agents for Everyone: A Workshop Framework for Building Agentic AI Capabilities
+in a Distributed Curation Community* (arXiv:2608.27675,
+<https://arxiv.org/abs/2608.27675>, August 2026). Its conclusion is the design
+brief for this repo: remove technical barriers, introduce capabilities
+gradually, and ground exercises in familiar curation tasks.
+
 ## Architecture
 
 ```

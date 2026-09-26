@@ -51,6 +51,20 @@ same fetch + extractor + `systemctl reload jupyterhub`) is a Phase 2
 once newcomer latency between users.yaml updates and people being able
 to log in starts to bite. Not yet implemented.
 
+## go-jupyter-sync-skills vs go-jupyter-refresh-user — which delivers what
+
+| Template file | Reaches existing homes via | When |
+|---|---|---|
+| `.claude/skills/**` | `go-jupyter-sync-skills` (timer, root) | ~5 min after `main` moves; hard mirror, backups kept |
+| `news/**` | `go-jupyter-sync-skills` | same; shown at the next session start if changed |
+| `CLAUDE.md`, `README.md`, `.bashrc`, `.mcp.json` | `sudo go-jupyter-refresh-user <user>|--all` | only when an operator runs it (`--dry-run` first) |
+
+Neither restarts the hub or touches a running session. A skill change reaches a
+running `claude` session on its next invoke; a `CLAUDE.md` change reaches it at
+relaunch. After any template change that touches the second row, run the
+refresh, or existing homes will carry a `CLAUDE.md` that contradicts their
+skills (seen 2026-09-24).
+
 ## go-jupyter-update-claude
 
 Keeps the box's global Claude Code install current, semi-automatically

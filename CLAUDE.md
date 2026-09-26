@@ -15,6 +15,12 @@ this file for the operating rules.
   per-user environment, and first-login home seeding from `user-templates/`.
 - `user-templates/<template>/` — a starter home. Files here are copied into a
   user's `/home` once, on first login. Edit these to change what curators get.
+  Delivery to *existing* homes is split: `.claude/skills/` and `news/` follow
+  `main` automatically (skills-sync timer, ~5 min, and running sessions pick up
+  skill text on next invoke); `CLAUDE.md`, `README.md`, `.bashrc`, `.mcp.json`
+  reach existing homes only when an operator runs `go-jupyter-refresh-user
+  --all`. A template change is not delivered until both have happened (see the
+  README's operating notes).
 - `scripts/`, `systemd/` — boot and runtime helpers (skills sync timer, user
   add/refresh/migrate).
 
@@ -48,6 +54,16 @@ this file for the operating rules.
   safe only on a disposable, trusted-participant, time-boxed workshop host. For
   anything else, restore permission prompts and per-user credentials (see the
   README's "Workshop mode" note).
+- **The drop-box contract is owned by `geneontology/go-cam-drop-box`; the
+  skills here implement it.** Since 2026-09-24 a submission is `<dev id>.yaml`
+  + `<dev id>.ttl` exported from the stored noctua-dev model; the model's state
+  is the curator's, and work in progress is a draft PR. When that contract
+  moves, change all of these in the same push, or curators get contradictory
+  instructions: `save-to-drop-box/SKILL.md`, the noctua skill's store/export
+  section, the template `CLAUDE.md` (skill list and the "where is my work
+  safe" table), and `news/NEWS.md`. The drop-box CI rejects a newly added
+  legacy-style (single YAML, `gcdb-` id) file with a message pointing at a
+  stale session, so a mismatch fails loudly rather than merging.
 - **Each user is a real Unix account on a shared host.** The hub runs
   privileged to create accounts; treat a hub compromise as a host compromise and
   keep the box disposable.

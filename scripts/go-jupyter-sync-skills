@@ -37,7 +37,11 @@
 #     place. Delete the file to resume. Explicit beats implicit divergence
 #     detection: a hold is something a human chose and can see.
 #
-#   * NO HUB RESTART. Skills load at each user's next `claude` launch.
+#   * NO HUB RESTART. Skill descriptions load at `claude` launch; a skill's BODY
+#     is read when it is invoked, and Claude Code watches the skills directories,
+#     so a running session runs the new text on its next invoke (Claude Code
+#     docs, checked 2026-09-25). This mirror covers skills/ and news/ ONLY: the
+#     template CLAUDE.md/README/.bashrc/.mcp.json are go-jupyter-refresh-user's.
 #
 # Personal notes and preferences do NOT belong in ~/.claude/skills/ (it is
 # mirrored away). Use ~/.claude/CLAUDE.md — Claude Code's user-level layer, which

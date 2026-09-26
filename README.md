@@ -129,6 +129,38 @@ cloud-init (never committed, never in the repo's history):
   copies whatever differs, so old copies would overwrite files written on the
   new box since. Copy per user, on request, if someone kept working on the old
   box through a still-open WebSocket.
+- **Delivering an instruction change to curators (2026-09-24 procedure).**
+  Two delivery paths, and they cover different files:
+  - `user-templates/<t>/.claude/skills/` and `news/` are mirrored into every
+    seeded home by `go-jupyter-sync-skills.timer` within ~5 minutes of a merge
+    to `main`. Per the Claude Code docs, a skill's *body* is read when the
+    skill is invoked and the skills directories are watched for changes, so a
+    `claude` session that has been running for days still runs the new
+    procedure the next time it is asked; only the skill's one-line description
+    is fixed at launch. News shows at the start of the next session.
+  - The template `CLAUDE.md`, `README.md`, `.bashrc` and `.mcp.json` are *not*
+    in the sync set. Existing homes keep their first-login copies until
+    `sudo go-jupyter-refresh-user --all` (a file operation with dated backups
+    under `~/.go-jupyter/refresh-backups/`; no hub restart; running sessions
+    unaffected, though they keep the old `CLAUDE.md` text until relaunched).
+    Run it with `--dry-run` first. Forgetting this leaves a home whose
+    `CLAUDE.md` contradicts the skill next to it, which is what happened on
+    2026-09-24 until the refresh was run.
+  Verify by looking at the homes, not the sync log: grep a distinctive phrase
+  of the change across `/home/*/.claude/skills/...` and `/home/*/CLAUDE.md`.
+- **The drop-box save is a two-file export from noctua-dev (since 2026-09-24).**
+  The contract itself lives in
+  [`geneontology/go-cam-drop-box`](https://github.com/geneontology/go-cam-drop-box)
+  (README, `CLAUDE.md`, `PROMOTIONS.md`); the `save-to-drop-box` skill here must
+  match it. What an operator of this box needs to know: curators build models on
+  noctua-dev through barista; the gocam-py YAML is derived on the box from the
+  minerva JSON returned by the m3 `get` operation, and the Turtle that actually
+  enters production comes from the m3 `export` operation, both taken from the
+  same **stored** state of the dev model under its dev-minted id. Storing is not
+  automatic: of the first 22 submissions, 9 had never been stored and were gone
+  from noctua-dev after its next restart, so no Turtle existed for them. Merged
+  pairs are copied into `noctua-models` at a Noctua maintenance outage with the
+  id unchanged (first batch: 12 models, 2026-09-24).
 - **Claude Code's version is not pinned.** Cloud-init installs the current npm
   release at first boot; after that `go-jupyter-update-claude.timer` moves it
   (hourly check, newest release at least two days old, only while no session is

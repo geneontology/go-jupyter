@@ -487,6 +487,16 @@ if IS_ROOT:
             with open(marker, 'w') as _m:
                 _m.write(chosen_template + '\n')
             subprocess.run(['chown', '-R', f'{username}:{username}', home])
+            # Skill sources (skill-sources.txt): clone them into the new home and
+            # link their skills into ~/.claude/skills. Best effort: the timer
+            # (go-jupyter-sync-skills) repeats it, so a failure here only delays.
+            link = '/usr/local/sbin/go-jupyter-link-skills'
+            if os.path.exists(link):
+                try:
+                    subprocess.run([link, username], capture_output=True, text=True,
+                                   timeout=120, check=False)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
 
     c.Spawner.pre_spawn_hook = pre_spawn_hook
 else:

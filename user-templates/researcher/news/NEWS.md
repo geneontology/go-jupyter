@@ -6,6 +6,22 @@ way.
 
 ---
 
+## 2026-09-28 — Skills now come from geneontology/go-skills, checked out in your home
+
+Your skills are no longer copies. `~/go-skills` is a git checkout of the shared
+GO skills repository, and the skills Claude sees (`~/.claude/skills/*`) are links
+into it. Two things follow:
+
+- **You get new and updated skills automatically**, within minutes of a merge
+  to go-skills, as long as your checkout is untouched. The first new one is
+  `gene-review`, for reviewing a gene's GO annotations.
+- **You can change a skill yourself.** Edit it in `~/go-skills` on a branch and
+  ask Claude to open a pull request to go-skills. While you are editing, the
+  automatic updates leave your checkout alone. Reviews are by the go-skills
+  admins.
+
+The GO-CAM skills you already had are moving into the same repository; until
+that lands they still appear as plain directories.
 
 ## 2026-09-24 — Saving to the drop box now sends two files, under the model's noctua-dev id
 

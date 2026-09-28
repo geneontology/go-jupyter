@@ -1,0 +1,10 @@
+# Skill sources for the GO AI hub (read by go-jupyter-link-skills; see scripts/README.md).
+#
+# One source per line:  <git url>  <ref>  <subdirectory holding <skill>/SKILL.md dirs>
+#
+# Every seeded account gets a clone of each source in its home (~/<repo name>) and
+# a symlink ~/.claude/skills/<skill> -> that clone, for every skill the source
+# holds. Everything for everyone: there is no per-template list (kltm, 2026-09-28).
+# The clone is the curator's to edit: on a branch, or with local changes, it is
+# left alone by the timer; clean on <ref> it is fast-forwarded.
+https://github.com/geneontology/go-skills.git main skills

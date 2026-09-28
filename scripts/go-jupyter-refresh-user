@@ -7,7 +7,7 @@
 # new skills/features added to a template don't reach them automatically. This
 # helper pushes the template's *template-owned* files into a user's home:
 #
-#   .claude/skills/   CLAUDE.md   README.md   .bashrc   .mcp.json
+#   .claude/skills/ (template copies + links into the skill sources)   CLAUDE.md   README.md   .bashrc   .mcp.json
 #
 # and NOTHING else — user-created files, ~/.claude.json, and
 # ~/.claude/settings.json are never touched or deleted. Any template file that
@@ -97,12 +97,27 @@ refresh_one() {
     bkroot="$home/.go-jupyter/refresh-backups/$TS"
     echo "== $user (template: $tmpl) =="
 
-    # 1. Skills. --backup-dir moves the previous version of any changed (and,
-    #    with --prune-skills, removed) file into the dated backup dir.
+    # 1. Skills. Template copies (transitional) are mirrored per skill directory,
+    #    never over a symlink; --backup-dir keeps previous versions. With
+    #    --prune-skills, files removed from a template skill are removed too.
+    #    Then the skill sources (skill-sources.txt) are cloned/linked.
     if [ -d "$src/.claude/skills" ]; then
         if [ "$PRUNE" -eq 1 ]; then del="--delete"; fi
-        rsync -a $DRYFLAG $del --backup --backup-dir="$bkroot/.claude/skills" \
-            "$src/.claude/skills/" "$home/.claude/skills/"
+        mkdir -p "$home/.claude/skills"
+        for sd in "$src/.claude/skills"/*/; do
+            [ -d "$sd" ] || continue
+            sk="$(basename "$sd")"
+            [ -L "$home/.claude/skills/$sk" ] && continue
+            rsync -a $DRYFLAG $del --backup --backup-dir="$bkroot/.claude/skills/$sk" \
+                "$sd" "$home/.claude/skills/$sk/"
+        done
+    fi
+    if [ -x /usr/local/sbin/go-jupyter-link-skills ]; then
+        if [ "$DRY" -eq 1 ]; then
+            /usr/local/sbin/go-jupyter-link-skills "$user" --dry-run
+        else
+            /usr/local/sbin/go-jupyter-link-skills "$user" >/dev/null || echo "  link-skills failed for $user"
+        fi
     fi
 
     # 2. Top-level template config files (add/update only; previous versions

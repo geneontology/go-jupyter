@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+#
+# go-jupyter-link-skills — give one user a checkout of each skill source and link
+# its skills into ~/.claude/skills.
+#
+# The model (kltm, 2026-09-28): skills live in their own repositories
+# (geneontology/go-skills first); go-jupyter is only the box. Each user's home
+# holds a real git clone of every source listed in /opt/go-jupyter/skill-sources.txt
+# (~/<repo name>), owned by the user, and ~/.claude/skills/<skill> is a relative
+# symlink into that clone. Claude Code follows the link and watches the target,
+# so an edit in the clone is live in the session.
+#
+#   * FAST-FORWARD ONLY WHEN CLEAN. A clone that is on <ref> with no local changes
+#     is fetched and fast-forwarded. A clone on another branch, or with local
+#     changes, is left exactly as it is (and logged): that is a curator editing a
+#     skill, and their work is the raw material for the future "dreaming" process
+#     that turns local skill edits into go-skills PRs.
+#   * NEVER REPLACES A REAL DIRECTORY. If ~/.claude/skills/<skill> is a directory
+#     rather than a link (a template copy during the transition, or a skill the
+#     curator authored), it is skipped and logged. Nothing here deletes a
+#     directory.
+#   * LINK HYGIENE. A link that points into one of our clones but whose target no
+#     longer exists (skill removed upstream) is removed. Links elsewhere are not
+#     touched.
+#   * Respects ~/.go-jupyter/hold-skills (skips the user).
+#
+# Usage: go-jupyter-link-skills <user> [--no-fetch] [--sources FILE] [--dry-run]
+#        go-jupyter-link-skills --home DIR [...]     (non-root testing only)
+#
+# Callers: go-jupyter-sync-skills (timer), go-jupyter-refresh-user, and the hub's
+# first-login seed (jupyterhub_config.py). Exit 0 unless the arguments are wrong.
+#
+set -euo pipefail
+
+SOURCES=/opt/go-jupyter/skill-sources.txt
+FETCH=1
+DRY=0
+USER_NAME=""
+HOME_OVERRIDE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --no-fetch) FETCH=0 ;;
+        --dry-run)  DRY=1 ;;
+        --sources)  SOURCES="${2:-}"; shift ;;
+        --home)     HOME_OVERRIDE="${2:-}"; shift ;;
+        -h|--help)  sed -n '2,40p' "$0"; exit 0 ;;
+        -*)         echo "unknown option: $1" >&2; exit 2 ;;
+        *)          USER_NAME="$1" ;;
+    esac
+    shift
+done
+
+log() { if [ "$(id -u)" -eq 0 ]; then logger -t go-jupyter-link-skills -- "$*"; fi; echo "  $*"; }
+run() { if [ "$DRY" -eq 1 ]; then echo "  would: $*"; else "$@"; fi; }
+
+if [ -n "$HOME_OVERRIDE" ]; then
+    [ "$(id -u)" -ne 0 ] || { echo "--home is for non-root testing only" >&2; exit 2; }
+    home="$HOME_OVERRIDE"; USER_NAME="$(id -un)"
+    as_user() { "$@"; }
+    own() { :; }
+else
+    [ "$(id -u)" -eq 0 ] || { echo "must run as root (try: sudo $0 $*)" >&2; exit 2; }
+    [ -n "$USER_NAME" ] || { echo "usage: $0 <user> [--no-fetch] [--sources FILE] [--dry-run]" >&2; exit 2; }
+    home="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+    [ -n "$home" ] && [ -d "$home" ] || { echo "no home directory for $USER_NAME" >&2; exit 2; }
+    as_user() { runuser -u "$USER_NAME" -- env HOME="$home" "$@"; }
+    own() { chown -h "$USER_NAME:$USER_NAME" "$@"; }
+fi
+
+[ -f "$SOURCES" ] || { log "no sources file at $SOURCES; nothing to do"; exit 0; }
+if [ -e "$home/.go-jupyter/hold-skills" ]; then log "hold $USER_NAME (hold-skills present)"; exit 0; fi
+
+skills_dir="$home/.claude/skills"
+run mkdir -p "$skills_dir"
+declare -A clone_dirs=()
+
+while read -r url ref subdir _; do
+    case "$url" in ''|'#'*) continue ;; esac
+    name="$(basename "$url" .git)"
+    clone="$home/$name"
+    clone_dirs["$name"]=1
+
+    if [ ! -d "$clone/.git" ]; then
+        if [ -e "$clone" ]; then log "$USER_NAME: $clone exists and is not a git checkout; skipping source $url"; continue; fi
+        log "$USER_NAME: cloning $url ($ref) into $clone"
+        if [ "$DRY" -eq 1 ]; then echo "  would: git clone --branch $ref $url $clone"; continue; fi
+        if ! as_user git clone -q --branch "$ref" "$url" "$clone" 2>/dev/null; then
+            log "$USER_NAME: clone of $url failed; will retry next run"; continue
+        fi
+    elif [ "$FETCH" -eq 1 ]; then
+        branch="$(as_user git -C "$clone" symbolic-ref --short -q HEAD 2>/dev/null || echo DETACHED)"
+        dirty="$(as_user git -C "$clone" status --porcelain 2>/dev/null | head -1)"
+        if [ "$branch" = "$ref" ] && [ -z "$dirty" ]; then
+            if [ "$DRY" -eq 1 ]; then echo "  would: fast-forward $clone to origin/$ref"; else
+                as_user git -C "$clone" fetch -q origin "$ref" 2>/dev/null \
+                    && as_user git -C "$clone" merge -q --ff-only FETCH_HEAD 2>/dev/null \
+                    || log "$USER_NAME: could not fast-forward $clone; left as is"
+            fi
+        else
+            log "$USER_NAME: $clone left alone (branch=$branch${dirty:+, local changes}) — curator edit in progress"
+        fi
+    fi
+
+    src="$clone/$subdir"
+    [ -d "$src" ] || { log "$USER_NAME: $src missing in $name; no skills linked from it"; continue; }
+    for d in "$src"/*/; do
+        [ -f "$d/SKILL.md" ] || continue
+        skill="$(basename "$d")"
+        dst="$skills_dir/$skill"
+        rel="../../$name/$subdir/$skill"
+        if [ -L "$dst" ]; then
+            [ "$(readlink "$dst")" = "$rel" ] || { run ln -sfn "$rel" "$dst"; own "$dst"; }
+        elif [ -e "$dst" ]; then
+            log "$USER_NAME: $skill is a real directory in ~/.claude/skills; not replaced by the $name link"
+        else
+            run ln -s "$rel" "$dst"; own "$dst"; log "$USER_NAME: linked $skill -> $rel"
+        fi
+    done
+done < "$SOURCES"
+
+# Remove links into our clones whose target vanished (skill removed upstream).
+for l in "$skills_dir"/*; do
+    [ -L "$l" ] || continue
+    t="$(readlink "$l")"
+    first="${t#../../}"; first="${first%%/*}"
+    if [ -n "${clone_dirs[$first]:-}" ] && [ ! -e "$l" ]; then
+        log "$USER_NAME: removing dangling link $(basename "$l") -> $t"; run rm -f "$l"
+    fi
+done
+exit 0

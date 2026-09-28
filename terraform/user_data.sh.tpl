@@ -342,6 +342,7 @@ systemctl enable --now jupyterhub.service
 # them into user homes every ~15 min (consumers only; locally-modified skills are
 # left alone; backups kept; no hub restart). The box half of the "curators PR
 # skills into go-jupyter" flow.
+install -m 0755 "$REPO_DIR/scripts/go-jupyter-link-skills" /usr/local/sbin/go-jupyter-link-skills
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-sync-skills" /usr/local/sbin/go-jupyter-sync-skills
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-sync-skills.service" /etc/systemd/system/go-jupyter-sync-skills.service
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-sync-skills.timer" /etc/systemd/system/go-jupyter-sync-skills.timer

@@ -15,12 +15,17 @@ this file for the operating rules.
   per-user environment, and first-login home seeding from `user-templates/`.
 - `user-templates/<template>/` — a starter home. Files here are copied into a
   user's `/home` once, on first login. Edit these to change what curators get.
-  Delivery to *existing* homes is split: `.claude/skills/` and `news/` follow
-  `main` automatically (skills-sync timer, ~5 min, and running sessions pick up
-  skill text on next invoke); `CLAUDE.md`, `README.md`, `.bashrc`, `.mcp.json`
+  Delivery to *existing* homes is split: `news/` follows `main` automatically
+  (skills-sync timer, ~5 min); `CLAUDE.md`, `README.md`, `.bashrc`, `.mcp.json`
   reach existing homes only when an operator runs `go-jupyter-refresh-user
   --all`. A template change is not delivered until both have happened (see the
   README's operating notes).
+- `skill-sources.txt` — the skill repositories (geneontology/go-skills first).
+  Skills are NOT authored in this repo: each user has a clone of every source in
+  their home and `~/.claude/skills/<skill>` links into it
+  (`scripts/go-jupyter-link-skills`, run by the timer, by `refresh-user`, and at
+  first login). Any skill directories still under `user-templates/*/.claude/skills/`
+  are transitional copies awaiting their move to go-skills (#60).
 - `scripts/`, `systemd/` — boot and runtime helpers (skills sync timer, user
   add/refresh/migrate).
 
@@ -55,7 +60,7 @@ this file for the operating rules.
   anything else, restore permission prompts and per-user credentials (see the
   README's "Workshop mode" note).
 - **The drop-box contract is owned by `geneontology/go-cam-drop-box`; the
-  skills here implement it.** Since 2026-09-24 a submission is `<dev id>.yaml`
+  skills (in geneontology/go-skills) implement it.** Since 2026-09-24 a submission is `<dev id>.yaml`
   + `<dev id>.ttl` exported from the stored noctua-dev model; the model's state
   is the curator's, and work in progress is a draft PR. When that contract
   moves, change all of these in the same push, or curators get contradictory

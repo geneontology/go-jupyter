@@ -51,6 +51,14 @@ Skills available:
   "submit" a completed model so it survives beyond this session. The model must
   be on noctua-dev and stored there first.
 
+Where skills come from: the entries in `~/.claude/skills/` are links into
+`~/go-skills`, a git checkout of https://github.com/geneontology/go-skills that
+is yours. New and changed skills arrive there automatically while the checkout
+is clean on `main`. To change a skill: edit it in `~/go-skills` on a branch (the
+change is live in this session at once), and open a pull request to go-skills;
+the sync leaves a branch or a dirty tree alone until it is back on a clean
+`main`. Skills that still appear as plain directories there are being moved.
+
 MCPs available:
 - **OLS** — Ontology Lookup Service term search (GO, CHEBI, and other
   ontologies).

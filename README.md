@@ -148,25 +148,26 @@ cloud-init (never committed, never in the repo's history):
   copies whatever differs, so old copies would overwrite files written on the
   new box since. Copy per user, on request, if someone kept working on the old
   box through a still-open WebSocket.
-- **Delivering an instruction change to curators (2026-09-24 procedure).**
-  Two delivery paths, and they cover different files:
-  - `user-templates/<t>/.claude/skills/` and `news/` are mirrored into every
-    seeded home by `go-jupyter-sync-skills.timer` within ~5 minutes of a merge
-    to `main`. Per the Claude Code docs, a skill's *body* is read when the
-    skill is invoked and the skills directories are watched for changes, so a
-    `claude` session that has been running for days still runs the new
-    procedure the next time it is asked; only the skill's one-line description
-    is fixed at launch. News shows at the start of the next session.
-  - The template `CLAUDE.md`, `README.md`, `.bashrc` and `.mcp.json` are *not*
-    in the sync set. Existing homes keep their first-login copies until
-    `sudo go-jupyter-refresh-user --all` (a file operation with dated backups
-    under `~/.go-jupyter/refresh-backups/`; no hub restart; running sessions
-    unaffected, though they keep the old `CLAUDE.md` text until relaunched).
-    Run it with `--dry-run` first. Forgetting this leaves a home whose
-    `CLAUDE.md` contradicts the skill next to it, which is what happened on
-    2026-09-24 until the refresh was run.
-  Verify by looking at the homes, not the sync log: grep a distinctive phrase
-  of the change across `/home/*/.claude/skills/...` and `/home/*/CLAUDE.md`.
+- **Where skills come from, and how changes reach curators (since 2026-09-28).**
+  Skills live in their own repositories, listed one per line in
+  `skill-sources.txt` (geneontology/go-skills first). Every seeded account holds
+  a real git clone of each source in its home (`~/go-skills`), owned by the
+  user, and `~/.claude/skills/<skill>` is a relative symlink into that clone.
+  Everything for everyone: no per-template list. The timer
+  (`go-jupyter-sync-skills`) checks each source's ref with one `ls-remote` per
+  tick and, when it moved, runs `go-jupyter-link-skills` for every user: a
+  clone that is clean on its ref is fast-forwarded; one on a branch or with
+  local changes is left alone and logged, because that is a curator editing a
+  skill. Claude Code follows the links and watches the targets, so an edit in
+  the clone is live in the session; a running session picks up new upstream
+  text on its next invoke of the skill. News still mirrors from the template
+  (`news/`) and shows at the next session start. The template `CLAUDE.md`,
+  `README.md`, `.bashrc` and `.mcp.json` still reach existing homes only via
+  `sudo go-jupyter-refresh-user --all` (dry-run first). Verify by looking at
+  the homes: `ls -l /home/*/.claude/skills` shows links into `~/go-skills`.
+  Transitional: skills still present as real directories in the template are
+  mirrored per skill directory, never with a whole-directory delete, until
+  go-skills serves them (#60).
 - **The drop-box save is a two-file export from noctua-dev (since 2026-09-24).**
   The contract itself lives in
   [`geneontology/go-cam-drop-box`](https://github.com/geneontology/go-cam-drop-box)

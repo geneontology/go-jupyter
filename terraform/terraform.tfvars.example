@@ -75,3 +75,9 @@ github_oauth_client_secret = ""
 # s3://go-service-lockbox/<domain>.tar.gz.
 wildcard_cert_s3_uri = "REPLACE_ME"
 # cert_domain = "example.org"   # defaults to route53_zone_name if unset
+
+# Optional: forward a vanity hostname to the box with a 302 (AWS-native; see
+# variables.tf). Leave unset to create nothing.
+# redirect_hostname   = "ai.geneontology.org"
+# redirect_target_url = "https://jupyter.geneontology.io"
+# redirect_zone_name  = "geneontology.org"

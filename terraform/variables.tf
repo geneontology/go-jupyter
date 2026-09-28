@@ -176,3 +176,28 @@ variable "cert_domain" {
   type        = string
   default     = ""
 }
+
+# ---- Optional hostname forward (Route53 + CloudFront function) -------------
+# Forwards redirect_hostname (e.g. "ai.geneontology.org") to redirect_target_url
+# with an HTTP 302, path and query preserved. AWS-native: an ACM certificate in
+# us-east-1 (DNS-validated in redirect_zone_name), a CloudFront distribution
+# whose viewer-request function answers before any origin is contacted, and
+# Route53 alias records. Non-permanent by design (302, no caching). Leave
+# redirect_hostname null to create nothing.
+variable "redirect_hostname" {
+  description = "Hostname to forward, fully qualified, inside redirect_zone_name. Null disables the forward."
+  type        = string
+  default     = null
+}
+
+variable "redirect_target_url" {
+  description = "Absolute URL the forward points at, scheme and host only, e.g. \"https://jupyter.geneontology.io\". The request path and query are appended."
+  type        = string
+  default     = null
+}
+
+variable "redirect_zone_name" {
+  description = "Public Route53 zone that holds redirect_hostname. Defaults to route53_zone_name."
+  type        = string
+  default     = null
+}

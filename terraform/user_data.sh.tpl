@@ -171,6 +171,11 @@ GO_JUPYTER_HOSTNAME=${hostname}
 GITHUB_OAUTH_CLIENT_ID=${github_oauth_client_id}
 GITHUB_OAUTH_CLIENT_SECRET=${github_oauth_client_secret}
 JHUB_ENV_EOF
+# Key for JupyterHub's encrypted auth_state: the GitHub OAuth token kept between
+# sign-in and spawn so `gh` can be logged in with it (jupyterhub_config.py, #31).
+# Generated here and never leaves the box; a rebuilt box gets a new one and
+# users simply sign in again.
+echo "JUPYTERHUB_CRYPT_KEY=$(openssl rand -hex 32)" >> /etc/jupyterhub/jupyterhub.env
 
 # GitHub OAuth allowlist — fetch geneontology/go-site/metadata/users.yaml
 # from raw.githubusercontent.com and run extract_github_users.py against

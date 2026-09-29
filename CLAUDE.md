@@ -52,8 +52,9 @@ this file for the operating rules.
   second stack, `scripts/go-jupyter-migrate`, repoint, retire (README).
 - **First boot writes things `go-jupyter-update` never touches.** The helpers
   in `/usr/local/sbin`, the systemd units, `/etc/claude-code/managed-settings.json`,
-  `/etc/gitconfig` (from `etc/gitconfig`) and the global Claude Code npm install
-  are all written by cloud-init once.
+  `/etc/gitconfig` (from `etc/gitconfig`), `/etc/jupyterhub/jupyterhub.env`
+  (including the generated `JUPYTERHUB_CRYPT_KEY`) and the global Claude Code
+  npm install are all written by cloud-init once.
   `go-jupyter-update` pulls the repo and restarts the hub; it does not reinstall
   any of them. To change one on a running box, change it in the repo *and* put
   the file in place by hand. Edits to `user_data.sh.tpl` reach only boxes built
@@ -78,6 +79,15 @@ this file for the operating rules.
   safe" table), and `news/NEWS.md`. The drop-box CI rejects a newly added
   legacy-style (single YAML, `gcdb-` id) file with a message pointing at a
   stale session, so a mismatch fails loudly rather than merging.
+- **The GitHub sign-in is also the `gh` login (#31, since 2026-09-29).** The
+  hub asks GitHub for `repo`, `read:org`, `user:email`, keeps the token as
+  encrypted auth_state (key generated on the box), and at spawn logs the user's
+  `gh` in with it unless gh is already logged in or `~/.go-jupyter/no-gh-token`
+  exists. The token then lives where a manual `gh auth login` would put it, so
+  `gh auth logout` and the manual login keep working as the fallback. This is
+  a convenience, not a narrowing: the token can do what the curator can, in
+  every process of their session. Changing the scopes makes GitHub re-ask
+  every user for consent at their next sign-in.
 - **Each user is a real Unix account on a shared host.** The hub runs
   privileged to create accounts; treat a hub compromise as a host compromise and
   keep the box disposable.

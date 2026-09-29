@@ -19,8 +19,10 @@
 #     fallback (GitHub links that older form only for accounts from before
 #     2017-07-18; a later run does not revisit it because the values are set).
 #
-# Usage: go-jupyter-git-identity <user> [--dry-run]
+# Usage: go-jupyter-git-identity <user> [--name NAME --email EMAIL] [--dry-run]
 #        go-jupyter-git-identity --all [--dry-run]     (every seeded home)
+#   --name/--email  use these values (the hub passes the profile from the
+#                   GitHub sign-in) instead of asking the GitHub API.
 #
 # Callers: the hub's first-login seed (jupyterhub_config.py), operators. Exit 0
 # unless the arguments are wrong.
@@ -32,10 +34,14 @@ API=https://api.github.com/users
 DRY=0
 ALL=0
 USER_NAME=""
+OPT_NAME=""
+OPT_EMAIL=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1 ;;
         --all)     ALL=1 ;;
+        --name)    OPT_NAME="${2:-}"; shift ;;
+        --email)   OPT_EMAIL="${2:-}"; shift ;;
         -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
         -*)        echo "unknown option: $1" >&2; exit 2 ;;
         *)         USER_NAME="$1" ;;
@@ -43,7 +49,8 @@ while [ $# -gt 0 ]; do
     shift
 done
 [ "$(id -u)" -eq 0 ] || { echo "must run as root (try: sudo $0 $*)" >&2; exit 2; }
-[ "$ALL" -eq 1 ] || [ -n "$USER_NAME" ] || { echo "usage: $0 <user> [--dry-run] | --all [--dry-run]" >&2; exit 2; }
+[ "$ALL" -eq 1 ] || [ -n "$USER_NAME" ] || { echo "usage: $0 <user> [--name NAME --email EMAIL] [--dry-run] | --all [--dry-run]" >&2; exit 2; }
+if [ "$ALL" -eq 1 ] && { [ -n "$OPT_NAME" ] || [ -n "$OPT_EMAIL" ]; }; then echo "--name/--email make no sense with --all" >&2; exit 2; fi
 
 log() { logger -t go-jupyter-git-identity -- "$*"; echo "  $*"; }
 
@@ -59,13 +66,14 @@ seed_one() {
     as_user git config --global --get user.email >/dev/null 2>&1 && have_email=1
     if [ "$have_name" -eq 1 ] && [ "$have_email" -eq 1 ]; then return 0; fi
 
-    if ! [ -f "$ALLOWED" ] || ! grep -qix -- "$user" "$ALLOWED"; then
-        log "$user: not a GitHub OAuth account (not in $ALLOWED); identity left for the user to set"
-        return 0
+    name="$OPT_NAME"; email="$OPT_EMAIL"
+    if [ -z "$name" ] || [ -z "$email" ]; then
+        if ! [ -f "$ALLOWED" ] || ! grep -qix -- "$user" "$ALLOWED"; then
+            log "$user: not a GitHub OAuth account (not in $ALLOWED); identity left for the user to set"
+            return 0
+        fi
     fi
-
-    name=""; email=""
-    if json="$(curl -fsS -m 8 -H 'Accept: application/vnd.github+json' -H 'User-Agent: go-jupyter-git-identity' "$API/$user" 2>/dev/null)"; then
+    if [ -z "$name" ] || [ -z "$email" ]; then if json="$(curl -fsS -m 8 -H 'Accept: application/vnd.github+json' -H 'User-Agent: go-jupyter-git-identity' "$API/$user" 2>/dev/null)"; then
         # email first (never contains spaces), then the name (may contain spaces).
         read -r email name < <(printf '%s' "$json" | python3 -c '
 import json, sys
@@ -74,7 +82,7 @@ login = d.get("login") or sys.argv[1]
 name = " ".join((d.get("name") or "").split()) or login
 email = (d.get("email") or "").strip() or "%s+%s@users.noreply.github.com" % (d.get("id"), login)
 print(email, name)' "$user" 2>/dev/null || true)
-    fi
+    fi; fi
     if [ -z "$name" ] || [ -z "$email" ]; then
         name="$user"; email="$user@users.noreply.github.com"
         log "$user: GitHub API not reachable; falling back to $name <$email>"

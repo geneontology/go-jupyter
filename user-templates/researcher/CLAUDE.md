@@ -55,10 +55,13 @@ Skills available:
   "submit" a completed model so it survives beyond this session. The model must
   be on noctua-dev and stored there first.
 
-GitHub from the terminal: `gh auth login` once per session is the only login
-step; `git push` then authenticates through `gh`, the first push of a branch sets
-its upstream, and your commit identity (`git config --global user.name`) was set
-from your GitHub profile at first login. Change it if you prefer another.
+GitHub from the terminal: signing in to the hub with GitHub also signs `gh` in
+for your account, so `gh pr create` and `git push` work with no second login
+(`gh auth status` shows it; `gh auth logout` ends it; `touch
+~/.go-jupyter/no-gh-token` stops the hub from doing it). If `gh` is ever not
+signed in, `gh auth login` is the fallback. The first push of a branch sets its
+upstream, and your commit identity (`git config --global user.name`) was set
+from your GitHub profile at first login; change it if you prefer another.
 
 Where skills come from: the entries in `~/.claude/skills/` are links into
 `~/go-skills`, a git checkout of https://github.com/geneontology/go-skills that

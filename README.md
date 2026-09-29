@@ -107,6 +107,10 @@ cloud-init (never committed, never in the repo's history):
 - agent backend key → `/etc/anthropic-api-key` or `/etc/gcp-credentials.json`
 - GitHub deploy key (only if your source repo is private) → baked into user_data
 - optional NCBI E-utilities key → `NCBI_API_KEY` in `/etc/default/go-jupyter`
+- JupyterHub auth-state key (`JUPYTERHUB_CRYPT_KEY`) → generated on the box at
+  first boot into `/etc/jupyterhub/jupyterhub.env`; not an operator secret. It
+  encrypts the GitHub OAuth token the hub keeps between sign-in and spawn so
+  that `gh` can be logged in with it (see the operating notes).
 
 ## Operating notes
 
@@ -187,6 +191,16 @@ cloud-init (never committed, never in the repo's history):
   from noctua-dev after its next restart, so no Turtle existed for them. Merged
   pairs are copied into `noctua-models` at a Noctua maintenance outage with the
   id unchanged (first batch: 12 models, 2026-09-24).
+- **Signing in with GitHub also signs in `gh` (since 2026-09-29).** The hub
+  requests `repo`, `read:org` and `user:email`, stores the token as encrypted
+  auth state, and at every spawn runs `gh auth login --with-token` as the user
+  when gh is not already logged in (and `~/.go-jupyter/no-gh-token` is absent).
+  `/etc/gitconfig` makes gh git's credential helper, and the first-login seed
+  sets the commit identity from the GitHub profile, so `git push` and `gh pr
+  create` work with no further steps. Manual `gh auth login` remains the
+  fallback (PAM accounts, revoked tokens). Rolling the scopes forward makes
+  GitHub re-ask every user for consent at their next sign-in; announce it in
+  `news/`.
 - **Claude Code's version is not pinned.** Cloud-init installs the current npm
   release at first boot; after that `go-jupyter-update-claude.timer` moves it
   (hourly check, newest release at least two days old, only while no session is

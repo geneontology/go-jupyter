@@ -55,8 +55,8 @@ this file for the operating rules.
 - **First boot writes things `go-jupyter-update` never touches.** The helpers
   in `/usr/local/sbin`, the systemd units, `/etc/claude-code/managed-settings.json`,
   `/etc/gitconfig` (from `etc/gitconfig`), `/etc/jupyterhub/jupyterhub.env`
-  (including the generated `JUPYTERHUB_CRYPT_KEY`), the system tools the skills
-  call (`runoak` under `/opt/uv-tools`, obo-scripts under `/opt/obo-scripts`) and
+  (including the generated `JUPYTERHUB_CRYPT_KEY`), the system tools the skills call (`runoak` under `/opt/uv-tools`, obo-scripts under
+  `/opt/obo-scripts`, and until #74 the `docker`/`robot` stand-ins from `etc/stubs/`) and
   the global Claude Code npm install are all written by cloud-init once.
   `go-jupyter-update` pulls the repo and restarts the hub; it does not reinstall
   any of them. To change one on a running box, change it in the repo *and* put

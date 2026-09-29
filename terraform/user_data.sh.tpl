@@ -348,6 +348,10 @@ systemctl enable --now jupyterhub.service
 # left alone; backups kept; no hub restart). The box half of the "curators PR
 # skills into go-jupyter" flow.
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-link-skills" /usr/local/sbin/go-jupyter-link-skills
+# `just`, the command runner ai4curation/ai-gene-review drives its steps with
+# (gene-review skill; #57). Its bootstrap would otherwise install a private copy
+# per user.
+apt-get install -y just
 # Tools the go-ontology skills (second entry in skill-sources.txt) call by name,
 # installed system-wide like any other command on the box (#60 item 6):
 #   * runoak (OAK) as a uv tool under /opt/uv-tools, command in /usr/local/bin;

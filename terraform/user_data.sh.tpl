@@ -361,6 +361,13 @@ fi
 for s in obo-grep.pl obo-checkout.pl obo-checkin.pl; do
     [ -f "/opt/obo-scripts/$s" ] && ln -sfn "/opt/obo-scripts/$s" "/usr/local/bin/$s"
 done
+# Until the ODK container can run here (#74): stand-ins for `docker` and `robot`
+# that explain the situation and fail cleanly, instead of "command not found".
+# REMOVE when Docker is installed (they would shadow /usr/bin/docker).
+if ! command -v docker >/dev/null 2>&1; then
+    install -m 0755 "$REPO_DIR/etc/stubs/docker" /usr/local/bin/docker
+fi
+install -m 0755 "$REPO_DIR/etc/stubs/robot" /usr/local/bin/robot
 # Git on the box: pushes to GitHub authenticate through gh, first pushes set
 # their upstream, and each OAuth account's commit identity is seeded from its
 # GitHub profile at first login (#48).

@@ -65,11 +65,18 @@ from your GitHub profile at first login; change it if you prefer another.
 
 Ontology editing: `~/go-ontology` is a checkout of
 https://github.com/geneontology/go-ontology limited to its skills and
-`src/ontology`. Its skills are not enabled on this box yet: the ontology
-toolchain (`robot`, the `make` targets, the reasoner) cannot run here so far,
-and a skill whose steps fail would mislead. Do not improvise around that; tell
-the user ontology editing is not available here yet and point them at
-go-ontology itself.
+`src/ontology` (the editable ontology files). Its skills (`chemical-entity`,
+`design-pattern`, `external-term-lookup`, `mapping`, `pr-review`, `reaction`,
+`research`, `taxon-constraint`, `term-obsoletion`) are linked like the others;
+work from inside `~/go-ontology` so that repository's own `CLAUDE.md` applies,
+branch there, open pull requests to go-ontology. **The ontology build tools are
+not available on this box yet**: `robot`, the `make` targets and the reasoner
+run in the ODK container, which this machine cannot run for now. A step that
+needs them stops with a message saying so. When that happens, say so plainly,
+do the parts that work (reading and editing `src/ontology`, `runoak` and
+`obo-grep.pl` lookups, design guidance, preparing the pull request), and tell
+the user that go-ontology's CI runs QC and reasoning on the pull request. Do
+not try to install those tools or work around the message.
 
 Where skills come from: the entries in `~/.claude/skills/` are links into
 `~/go-skills`, a git checkout of https://github.com/geneontology/go-skills that

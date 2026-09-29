@@ -1,0 +1,20 @@
+#!/bin/sh
+# Stand-in for `robot` on the GO AI hub while the ODK toolchain is not available
+# (geneontology/go-jupyter#74). Some go-ontology skills call `robot` directly; on the
+# host it does not exist (it lives in the ODK container). Same message as the docker
+# stand-in, same clean failure. Remove together with it when the toolchain arrives.
+cat >&2 <<'MSG'
+The ontology build tools are not available on the GO AI hub yet.
+
+  What this means: `robot`, the go-ontology Makefile targets (make test, make
+  reasoned.ofn, ...) and the reasoner run inside the ODK container, and this
+  machine cannot run that container for now (memory and setup; status:
+  https://github.com/geneontology/go-jupyter/issues/74).
+
+  What still works here: reading and editing src/ontology, term lookups
+  (runoak, obo-grep.pl), design guidance, and preparing a pull request.
+
+  Where the checks run: open the pull request to geneontology/go-ontology;
+  its CI runs the full QC and reasoning on your branch.
+MSG
+exit 1

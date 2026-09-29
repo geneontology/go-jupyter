@@ -6,14 +6,18 @@ way.
 
 ---
 
-## 2026-09-29 — Ontology editing: being set up, not usable yet
+## 2026-09-29 — Ontology editing skills, with one limit
 
-A checkout of geneontology/go-ontology now sits in your home at `~/go-ontology`
-(its agent skills and the editable ontology files). Its skills are **not yet
-enabled** here: they rely on the ontology toolchain (`robot`, the `make`
-targets, the reasoner), which this machine cannot run yet. They will be
-switched on, with a note here, once that works. Until then, ontology editing
-happens the usual way in go-ontology itself.
+A checkout of geneontology/go-ontology sits in your home at `~/go-ontology`
+(its agent skills and the editable ontology files), and its skills for chemical
+entities, design patterns, external term lookup, mappings, pull-request review,
+reactions, research, taxon constraints and term obsoletion are on. Start from
+inside `~/go-ontology`; branches and pull requests go to go-ontology.
+
+The limit: the ontology build tools (`robot`, the `make` targets, the reasoner)
+cannot run on this machine yet. A step that needs them stops with a message
+saying so; go-ontology's CI runs the full QC and reasoning on your pull request
+instead. Lookups (`runoak`, `obo-grep.pl`), editing and review guidance work.
 
 ---
 

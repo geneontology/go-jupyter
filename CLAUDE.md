@@ -38,17 +38,19 @@ this file for the operating rules.
 - **Tighten the security group before sharing a URL.** `allowed_ssh_cidrs` and
   `allowed_web_cidrs` default to `0.0.0.0/0` for first bring-up.
 - **`prevent_destroy` guards the instance** because a replacement wipes every
-  user's `/home` (there is no standing backup). Changing `user_data` / `git_ref`
-  / a token / the hostname forces replacement — read the plan. Port users with
-  `scripts/go-jupyter-migrate` before a deliberate rebuild.
+  user's `/home` (there is no standing backup). The AMI and `user_data` are
+  `ignore_changes` (first-boot-only inputs; cloud-init runs once), so a plain
+  `terraform plan` stays clean as the template and Canonical's images move on.
+  Anything else that forces replacement (instance type family, subnet, key)
+  turns the plan into an error — read it. A rebuild is a deliberate blue/green:
+  second stack, `scripts/go-jupyter-migrate`, repoint, retire (README).
 - **First boot writes things `go-jupyter-update` never touches.** The helpers
   in `/usr/local/sbin`, the systemd units, `/etc/claude-code/managed-settings.json`
   and the global Claude Code npm install are all written by cloud-init once.
   `go-jupyter-update` pulls the repo and restarts the hub; it does not reinstall
   any of them. To change one on a running box, change it in the repo *and* put
-  the file in place by hand. After any edit to `user_data.sh.tpl`, `terraform
-  plan` proposes replacing the instance; that is expected, and not a reason to
-  apply it.
+  the file in place by hand. Edits to `user_data.sh.tpl` reach only boxes built
+  after them; the running instance ignores `user_data` drift (see above).
 - **Apply only what you have read.** `terraform plan -out=<file>` first, then
   `terraform apply <file>` as a separate step; never `-auto-approve`, and never
   chain plan and apply in one command. A plan that destroys anything is a

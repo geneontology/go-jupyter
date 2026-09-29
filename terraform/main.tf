@@ -174,6 +174,9 @@ resource "aws_instance" "this" {
     volume_type = "gp3"
     volume_size = var.root_volume_size_gb
     encrypted   = true
+    # EC2 does not copy instance tags onto the root volume; without this the
+    # disk is untagged (no Project, no Name) in billing and tag-based queries.
+    tags = local.tags
   }
 
   # gzip+base64 the cloud-init script: EC2 caps raw user_data at 16 KiB, which
@@ -207,10 +210,20 @@ resource "aws_instance" "this" {
   # place" to "destroy and recreate". prevent_destroy turns that into a hard
   # error instead of a silent wipe.
   #
-  # To do a genuine rebuild: comment this block out, apply, and put it back.
-  # Port the users first with `sudo go-jupyter-migrate <old-host>`.
+  # ignore_changes covers the two inputs that only matter at first boot and
+  # drift on their own: the AMI lookup moves whenever Canonical publishes a new
+  # image, and user_data changes with every edit to user_data.sh.tpl. Neither
+  # can be applied to a running box (cloud-init runs once), so tracking them
+  # only made every plan a replacement, which prevent_destroy turns into an
+  # error, which left no way to apply in-place changes (tags, volume size)
+  # without -target. New boxes still get the current AMI and template.
+  #
+  # To do a genuine rebuild: bring up a second stack from its own state and
+  # migrate (blue/green, see README), or comment this block out, apply, and put
+  # it back. Port the users first with `sudo go-jupyter-migrate <old-host>`.
   lifecycle {
     prevent_destroy = true
+    ignore_changes  = [ami, user_data_base64]
   }
 
   tags = local.tags

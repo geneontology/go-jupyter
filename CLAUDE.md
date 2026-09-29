@@ -51,8 +51,9 @@ this file for the operating rules.
   turns the plan into an error — read it. A rebuild is a deliberate blue/green:
   second stack, `scripts/go-jupyter-migrate`, repoint, retire (README).
 - **First boot writes things `go-jupyter-update` never touches.** The helpers
-  in `/usr/local/sbin`, the systemd units, `/etc/claude-code/managed-settings.json`
-  and the global Claude Code npm install are all written by cloud-init once.
+  in `/usr/local/sbin`, the systemd units, `/etc/claude-code/managed-settings.json`,
+  `/etc/gitconfig` (from `etc/gitconfig`) and the global Claude Code npm install
+  are all written by cloud-init once.
   `go-jupyter-update` pulls the repo and restarts the hub; it does not reinstall
   any of them. To change one on a running box, change it in the repo *and* put
   the file in place by hand. Edits to `user_data.sh.tpl` reach only boxes built

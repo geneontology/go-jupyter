@@ -86,3 +86,15 @@ sudo go-jupyter-update-claude --force       # skip the hold and idle gate
 journalctl -t go-jupyter-update-claude      # decisions
 cat /var/log/go-jupyter-claude-updates.log  # applied updates
 ```
+
+## go-jupyter-git-identity — commit identity from the GitHub profile
+
+`sudo go-jupyter-git-identity <user>` (or `--all`, `--dry-run`) sets `user.name`
+and `user.email` in a user's `~/.gitconfig` from their public GitHub profile
+(name, or the login; public email, or GitHub's `<id>+<login>@users.noreply`
+address), and only when they are unset. It runs at first login from the hub's
+seed hook for accounts that came in through GitHub OAuth; side-door (PAM)
+accounts are skipped and logged. Together with `/etc/gitconfig` (installed from
+`etc/gitconfig`: `gh` as git's credential helper for github.com, `push.autoSetupRemote`),
+this means a session needs only `gh auth login` before `git push` and `gh pr
+create` work (#48). The browser step of that login is #31.

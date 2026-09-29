@@ -497,6 +497,17 @@ if IS_ROOT:
                                    timeout=120, check=False)
                 except (OSError, subprocess.TimeoutExpired):
                     pass
+            # Git identity from the GitHub profile (user.name / user.email into
+            # ~/.gitconfig, only if unset), so the first commit in a session does
+            # not stop at "Author identity unknown" (#48). Best effort, short
+            # timeout: one unauthenticated GitHub API call.
+            ident = '/usr/local/sbin/go-jupyter-git-identity'
+            if os.path.exists(ident):
+                try:
+                    subprocess.run([ident, username], capture_output=True, text=True,
+                                   timeout=30, check=False)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
 
     c.Spawner.pre_spawn_hook = pre_spawn_hook
 else:

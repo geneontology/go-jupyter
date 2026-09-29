@@ -343,6 +343,11 @@ systemctl enable --now jupyterhub.service
 # left alone; backups kept; no hub restart). The box half of the "curators PR
 # skills into go-jupyter" flow.
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-link-skills" /usr/local/sbin/go-jupyter-link-skills
+# Git on the box: pushes to GitHub authenticate through gh, first pushes set
+# their upstream, and each OAuth account's commit identity is seeded from its
+# GitHub profile at first login (#48).
+install -m 0644 "$REPO_DIR/etc/gitconfig" /etc/gitconfig
+install -m 0755 "$REPO_DIR/scripts/go-jupyter-git-identity" /usr/local/sbin/go-jupyter-git-identity
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-sync-skills" /usr/local/sbin/go-jupyter-sync-skills
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-sync-skills.service" /etc/systemd/system/go-jupyter-sync-skills.service
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-sync-skills.timer" /etc/systemd/system/go-jupyter-sync-skills.timer

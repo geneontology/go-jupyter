@@ -55,13 +55,21 @@ Skills available:
   "submit" a completed model so it survives beyond this session. The model must
   be on noctua-dev and stored there first.
 
+GitHub from the terminal: signing in to the hub with GitHub also signs `gh` in
+for your account, so `gh pr create` and `git push` work with no second login
+(`gh auth status` shows it; `gh auth logout` ends it; `touch
+~/.go-jupyter/no-gh-token` stops the hub from doing it). If `gh` is ever not
+signed in, `gh auth login` is the fallback. The first push of a branch sets its
+upstream, and your commit identity (`git config --global user.name`) was set
+from your GitHub profile at first login; change it if you prefer another.
+
 Where skills come from: the entries in `~/.claude/skills/` are links into
 `~/go-skills`, a git checkout of https://github.com/geneontology/go-skills that
 is yours. New and changed skills arrive there automatically while the checkout
 is clean on `main`. To change a skill: edit it in `~/go-skills` on a branch (the
-change is live in this session at once), and open a pull request to go-skills;
-the sync leaves a branch or a dirty tree alone until it is back on a clean
-`main`. A plain directory there (not a link) is one you made or changed
+change is live in this session at once), and open a pull request to go-skills
+(its `CONTRIBUTING.md` has the exact steps); the sync leaves a branch or a
+dirty tree alone until it is back on a clean `main`. A plain directory there (not a link) is one you made or changed
 yourself; the sync never touches it.
 
 MCPs available:

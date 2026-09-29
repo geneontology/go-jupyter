@@ -1,0 +1,14 @@
+# System-wide git configuration for the GO AI hub (installed to /etc/gitconfig by
+# cloud-init; see terraform/user_data.sh.tpl). Applies to every account on the box.
+#
+# GitHub pushes authenticate through the gh CLI, so `gh auth login` is the only
+# login step a session needs (this is what `gh auth setup-git` would write per user).
+# The first push of a new branch sets its upstream by itself.
+[credential "https://github.com"]
+	helper = !/usr/bin/gh auth git-credential
+[credential "https://gist.github.com"]
+	helper = !/usr/bin/gh auth git-credential
+[push]
+	autoSetupRemote = true
+[init]
+	defaultBranch = main

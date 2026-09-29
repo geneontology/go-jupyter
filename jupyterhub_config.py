@@ -348,17 +348,42 @@ if IS_ROOT:
         github_allowed_users = _read_username_list(
             '/etc/jupyterhub/github_allowed_users.txt'
         )
+        github_config = {
+            'client_id': github_oauth_client_id,
+            'client_secret': github_oauth_client_secret,
+            'oauth_callback_url': (
+                f'https://{public_hostname}/hub/github/oauth_callback'
+            ),
+            'allowed_users': github_allowed_users,
+        }
+        # GitHub token hand-off (#31, #48). With JUPYTERHUB_CRYPT_KEY in the
+        # hub's environment (cloud-init generates it into jupyterhub.env), the
+        # OAuth token from "Sign in with GitHub" is kept as encrypted auth_state
+        # and, at spawn, `gh` is logged in with it (see auth_state_hook and
+        # pre_spawn_hook), so `gh pr create` and `git push` need no second
+        # GitHub login. Scopes: `repo` is what pushes and PRs need, `read:org`
+        # is gh's own minimum for organisation repositories, `user:email` gives
+        # the profile email for the commit identity. Because the scopes grew,
+        # GitHub asks every user for consent once more at their next sign-in.
+        # Without the key nothing changes: identity-only scope, no token kept.
+        # The login handler saves auth_state only when the SUB-authenticator
+        # enables it (multiauthenticator binds handlers to the wrapped
+        # sub-authenticator); the top-level flag adds JupyterHub's startup check
+        # that encryption actually works, so a missing key fails at start, not
+        # at the first login.
+        if os.environ.get('JUPYTERHUB_CRYPT_KEY'):
+            github_config['enable_auth_state'] = True
+            github_config['scope'] = ['repo', 'read:org', 'user:email']
+            c.MultiAuthenticator.enable_auth_state = True
+        else:
+            import sys as _sys
+            print('go-jupyter: JUPYTERHUB_CRYPT_KEY is not set; the gh token '
+                  'hand-off is disabled (curators use `gh auth login`).',
+                  file=_sys.stderr)
         c.MultiAuthenticator.authenticators.append((
             LowercasedGitHubOAuthenticator,
             '/github',
-            {
-                'client_id': github_oauth_client_id,
-                'client_secret': github_oauth_client_secret,
-                'oauth_callback_url': (
-                    f'https://{public_hostname}/hub/github/oauth_callback'
-                ),
-                'allowed_users': github_allowed_users,
-            },
+            github_config,
         ))
 
 
@@ -395,8 +420,24 @@ if IS_ROOT:
         'ubuntu', 'jupyterhub', 'caddy',
     })
 
+    def auth_state_hook(spawner, auth_state):
+        """JupyterHub runs this before pre_spawn_hook, i.e. possibly before the
+        Unix account exists. Keep what the GitHub sign-in gave us (token,
+        granted scopes, profile) on the spawner for pre_spawn_hook to use.
+        auth_state is None for PAM logins and when auth_state is disabled."""
+        spawner._go_jupyter_github = None
+        if auth_state and auth_state.get('access_token'):
+            spawner._go_jupyter_github = {
+                'token': auth_state['access_token'],
+                'scopes': list(auth_state.get('scope') or []),
+                'profile': dict(auth_state.get('github_user') or {}),
+            }
+
+    c.Spawner.auth_state_hook = auth_state_hook
+
     def pre_spawn_hook(spawner):
         username = spawner.user.name
+        github = getattr(spawner, '_go_jupyter_github', None) or {}
 
         # Defensive validation. Both checks were absent in the original
         # FirstUseAuthenticator setup; that was tolerable when users picked
@@ -497,6 +538,52 @@ if IS_ROOT:
                                    timeout=120, check=False)
                 except (OSError, subprocess.TimeoutExpired):
                     pass
+            # Git identity (user.name / user.email into ~/.gitconfig, only if
+            # unset), so the first commit in a session does not stop at "Author
+            # identity unknown" (#48). Values come from the GitHub profile the
+            # sign-in returned when we have it; otherwise the helper asks the
+            # public GitHub API for the login. Best effort, short timeout.
+            ident = '/usr/local/sbin/go-jupyter-git-identity'
+            if os.path.exists(ident):
+                ident_args = [ident, username]
+                profile = github.get('profile') or {}
+                login = profile.get('login')
+                if login:
+                    ident_args += ['--name', profile.get('name') or login]
+                    email = profile.get('email')
+                    if not email and profile.get('id'):
+                        email = f"{profile['id']}+{login}@users.noreply.github.com"
+                    if email:
+                        ident_args += ['--email', email]
+                try:
+                    subprocess.run(ident_args, capture_output=True, text=True,
+                                   timeout=30, check=False)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+
+        # GitHub token hand-off (#31), every spawn, not only the first: if this
+        # spawn follows a GitHub sign-in whose token carries `repo`, log the
+        # user's `gh` in with it, unless gh is already logged in (a login the
+        # user made themselves is left alone) or they opted out with
+        # ~/.go-jupyter/no-gh-token. The token goes exactly where `gh auth
+        # login` puts it (~/.config/gh/hosts.yml, owner-only); `gh auth logout`
+        # removes it, and the next spawn after a fresh sign-in puts it back.
+        # /etc/gitconfig makes gh git's credential helper, so `git push` follows.
+        if github.get('token') and 'repo' in github.get('scopes', []) \
+                and not os.path.exists(os.path.join(home, '.go-jupyter', 'no-gh-token')):
+            as_user = ['runuser', '-u', username, '--', 'env', f'HOME={home}']
+            try:
+                status = subprocess.run(
+                    as_user + ['gh', 'auth', 'status', '--hostname', 'github.com'],
+                    capture_output=True, text=True, timeout=20, check=False)
+                if status.returncode != 0:
+                    subprocess.run(
+                        as_user + ['gh', 'auth', 'login', '--hostname', 'github.com',
+                                   '--git-protocol', 'https', '--with-token'],
+                        input=github['token'] + '\n',
+                        capture_output=True, text=True, timeout=30, check=False)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
 
     c.Spawner.pre_spawn_hook = pre_spawn_hook
 else:

@@ -6,6 +6,14 @@ way.
 
 ---
 
+## 2026-09-29 — GitHub from the terminal: no second login
+
+Signing in to the hub with GitHub now also signs in the `gh` command for your
+account, so `git push` and `gh pr create` work without the copy-a-code login
+step. At your next sign-in GitHub asks you once to approve repository access
+for the hub; that approval is what makes this work. Your commit name and email
+are set from your GitHub profile if you had none. `gh auth logout` ends the
+terminal login at any time; `gh auth login` remains available as the fallback.
 ## 2026-09-29 — Sessions now run on Opus 5.5
 
 Claude Code in your sessions now runs on Opus (currently Opus 5.5) as the main

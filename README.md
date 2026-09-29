@@ -167,7 +167,11 @@ cloud-init (never committed, never in the repo's history):
   the homes: `ls -l /home/*/.claude/skills` shows links into `~/go-skills`.
   Transitional: skills still present as real directories in the template are
   mirrored per skill directory, never with a whole-directory delete, until
-  go-skills serves them (#60).
+  go-skills serves them (#60). Once go-skills serves one, `link-skills` replaces
+  a home's copy with the link when the copy is byte-identical to the template's
+  (the copy is kept under `~/.go-jupyter/refresh-backups/`); a copy the curator
+  changed stays, and is logged. Delete the template copy from the repo only
+  after that has happened in every home.
 - **The drop-box save is a two-file export from noctua-dev (since 2026-09-24).**
   The contract itself lives in
   [`geneontology/go-cam-drop-box`](https://github.com/geneontology/go-cam-drop-box)

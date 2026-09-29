@@ -9,12 +9,6 @@ locals {
   redirect_target_host = local.redirect_enabled ? regex("^https?://([^/]+)", var.redirect_target_url)[0] : ""
 }
 
-# CloudFront only accepts certificates from us-east-1.
-provider "aws" {
-  alias  = "us_east_1"
-  region = "us-east-1"
-}
-
 data "aws_route53_zone" "redirect" {
   count        = local.redirect_enabled ? 1 : 0
   name         = local.redirect_zone
@@ -23,7 +17,7 @@ data "aws_route53_zone" "redirect" {
 
 resource "aws_acm_certificate" "redirect" {
   count             = local.redirect_enabled ? 1 : 0
-  provider          = aws.us_east_1
+  region            = "us-east-1" # CloudFront only accepts certificates from us-east-1
   domain_name       = var.redirect_hostname
   validation_method = "DNS"
   tags              = local.tags
@@ -52,7 +46,7 @@ resource "aws_route53_record" "redirect_validation" {
 
 resource "aws_acm_certificate_validation" "redirect" {
   count                   = local.redirect_enabled ? 1 : 0
-  provider                = aws.us_east_1
+  region                  = "us-east-1"
   certificate_arn         = aws_acm_certificate.redirect[0].arn
   validation_record_fqdns = [for r in aws_route53_record.redirect_validation : r.fqdn]
 }
@@ -63,6 +57,7 @@ resource "aws_cloudfront_function" "redirect" {
   runtime = "cloudfront-js-2.0"
   publish = true
   comment = "302 ${var.redirect_hostname} -> ${var.redirect_target_url} (path and query preserved)"
+  tags    = local.tags
   code    = <<-EOT
     function handler(event) {
       var req = event.request;

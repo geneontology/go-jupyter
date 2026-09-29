@@ -75,7 +75,7 @@ to `/usr/local/sbin` by cloud-init and run hourly by
 has been published for at least two days, and only while no curator
 session is mid-turn; a live-but-idle session keeps running the old code
 and picks the new version up at its next `claude` launch. Because the hub
-hands sessions the `fable` / `opus` model aliases, a Claude Code update
+hands sessions the `opus` / `sonnet` model aliases, a Claude Code update
 can also move curators to newer models.
 
 ```sh

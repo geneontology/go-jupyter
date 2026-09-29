@@ -88,11 +88,13 @@ using an API key file) or Anthropic models on Vertex AI (`backend = "vertex"`,
 using a GCP service-account key). The choice is written to
 `/etc/default/go-jupyter` and can be flipped in place with a hub restart.
 
-Model policy (2026-09-22): sessions get `ANTHROPIC_MODEL=fable` and the managed
-setting `fallbackModel: ["opus"]`, Claude Code's aliases for the current Fable
-and Opus releases, so no model ID is pinned in the repo. Claude Code resolves
-the aliases per version, which makes `go-jupyter-update-claude` (hourly timer,
-newest npm release at least two days old, idle-gated, frozen by
-`/etc/go-jupyter/hold-claude`) the path by which curators reach newer models.
-Fable's content-based fallback to Opus is built into Claude Code and needs no
-configuration.
+Model policy (2026-09-29, #24): sessions get `ANTHROPIC_MODEL=opus` and the
+managed setting `fallbackModel: ["sonnet"]`, Claude Code's aliases for the
+current Opus and Sonnet releases, so no model ID is pinned in the repo. Opus is
+the main driver by decision (it replaced Fable primary with Opus fallback, the
+2026-09-22 policy). Claude Code resolves the aliases per version, which makes
+`go-jupyter-update-claude` (hourly timer, newest npm release at least two days
+old, idle-gated, frozen by `/etc/go-jupyter/hold-claude`) the path by which
+curators reach newer models. Changing the primary model is two edits, the env
+in `jupyterhub_config.py` (hub restart) and the managed settings file (in the
+template and, by hand, on the box), plus a NEWS entry.

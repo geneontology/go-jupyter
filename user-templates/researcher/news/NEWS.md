@@ -6,6 +6,15 @@ way.
 
 ---
 
+## 2026-09-29 — Sessions now run on Opus 5.5
+
+Claude Code in your sessions now runs on Opus (currently Opus 5.5) as the main
+model, with Sonnet as the fallback if Opus is briefly unavailable (you see a
+notice when that happens). Until now the main model was Fable 5.1 with Opus as
+fallback. `/model` in a session still lets you switch for that session.
+
+---
+
 ## 2026-09-28 — Skills now come from geneontology/go-skills, checked out in your home
 
 Your skills are no longer copies. `~/go-skills` is a git checkout of the shared

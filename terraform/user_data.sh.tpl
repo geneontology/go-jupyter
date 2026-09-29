@@ -348,6 +348,19 @@ systemctl enable --now jupyterhub.service
 # left alone; backups kept; no hub restart). The box half of the "curators PR
 # skills into go-jupyter" flow.
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-link-skills" /usr/local/sbin/go-jupyter-link-skills
+# Tools the go-ontology skills (second entry in skill-sources.txt) call by name,
+# installed system-wide like any other command on the box (#60 item 6):
+#   * runoak (OAK) as a uv tool under /opt/uv-tools, command in /usr/local/bin;
+#   * obo-scripts (obo-grep.pl and friends, Perl) from cmungall/obo-scripts.
+# The ODK Docker image is deliberately absent; the two skills that need it are
+# excluded in skill-sources.txt.
+UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin /usr/local/bin/uv tool install --python 3.12 oaklib || echo "WARN: oaklib install failed; go-ontology skills that call runoak will not work"
+if [ ! -d /opt/obo-scripts ]; then
+    git clone -q --depth 1 https://github.com/cmungall/obo-scripts.git /opt/obo-scripts || echo "WARN: obo-scripts clone failed"
+fi
+for s in obo-grep.pl obo-checkout.pl obo-checkin.pl; do
+    [ -f "/opt/obo-scripts/$s" ] && ln -sfn "/opt/obo-scripts/$s" "/usr/local/bin/$s"
+done
 # Git on the box: pushes to GitHub authenticate through gh, first pushes set
 # their upstream, and each OAuth account's commit identity is seeded from its
 # GitHub profile at first login (#48).

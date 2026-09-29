@@ -20,9 +20,11 @@ this file for the operating rules.
   reach existing homes only when an operator runs `go-jupyter-refresh-user
   --all`. A template change is not delivered until both have happened (see the
   README's operating notes).
-- `skill-sources.txt` — the skill repositories (geneontology/go-skills first).
-  Skills are NOT authored in this repo: each user has a clone of every source in
-  their home and `~/.claude/skills/<skill>` links into it
+- `skill-sources.txt` — the skill repositories (geneontology/go-skills first,
+  geneontology/go-ontology second as a blobless sparse clone of its skills and
+  `src/ontology`, two ODK-bound skills excluded; first listed wins a name
+  collision). Skills are NOT authored in this repo: each user has a clone of
+  every source in their home and `~/.claude/skills/<skill>` links into it
   (`scripts/go-jupyter-link-skills`, run by the timer, by `refresh-user`, and at
   first login). The only skill directories left under
   `user-templates/*/.claude/skills/` are the tutorial's workshop-specific ones
@@ -53,8 +55,9 @@ this file for the operating rules.
 - **First boot writes things `go-jupyter-update` never touches.** The helpers
   in `/usr/local/sbin`, the systemd units, `/etc/claude-code/managed-settings.json`,
   `/etc/gitconfig` (from `etc/gitconfig`), `/etc/jupyterhub/jupyterhub.env`
-  (including the generated `JUPYTERHUB_CRYPT_KEY`) and the global Claude Code
-  npm install are all written by cloud-init once.
+  (including the generated `JUPYTERHUB_CRYPT_KEY`), the system tools the skills
+  call (`runoak` under `/opt/uv-tools`, obo-scripts under `/opt/obo-scripts`) and
+  the global Claude Code npm install are all written by cloud-init once.
   `go-jupyter-update` pulls the repo and restarts the hub; it does not reinstall
   any of them. To change one on a running box, change it in the repo *and* put
   the file in place by hand. Edits to `user_data.sh.tpl` reach only boxes built

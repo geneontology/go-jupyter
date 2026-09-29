@@ -26,7 +26,16 @@
 #     with) is left as it is and logged. Nothing here deletes a directory.
 #   * LINK HYGIENE. A link that points into one of our clones but whose target no
 #     longer exists (skill removed upstream) is removed. Links elsewhere are not
-#     touched.
+#     touched. Two sources offering the same skill name: the source listed first
+#     in skill-sources.txt wins, the other is logged and not linked.
+#   * SOURCE OPTIONS (skill-sources.txt, after <url> <ref> <subdir>):
+#       sparse=<dir>[,<dir>...]  blobless partial clone (--filter=blob:none) with
+#                                a cone sparse checkout of these directories plus
+#                                <subdir>; root-level files come along. For big
+#                                repositories such as go-ontology (208 MB this
+#                                way, 2026-09-29, against gigabytes in full).
+#       exclude=<skill>[,...]    skills of this source not to link (e.g. ones
+#                                that need tools the box does not have).
 #   * Respects ~/.go-jupyter/hold-skills (skips the user).
 #
 # Usage: go-jupyter-link-skills <user> [--no-fetch] [--sources FILE] [--dry-run]
@@ -92,18 +101,41 @@ skills_dir="$home/.claude/skills"
 run mkdir -p "$skills_dir"
 declare -A clone_dirs=()
 
-while read -r url ref subdir _; do
+while read -r url ref subdir rest; do
     case "$url" in ''|'#'*) continue ;; esac
     name="$(basename "$url" .git)"
     clone="$home/$name"
     clone_dirs["$name"]=1
+    sparse=""; exclude=""
+    for kv in $rest; do
+        case "$kv" in
+            sparse=*)  sparse="${kv#sparse=}" ;;
+            exclude=*) exclude="${kv#exclude=}" ;;
+            '#'*)      break ;;
+            *)         log "$USER_NAME: unknown option '$kv' for $url; ignored" ;;
+        esac
+    done
 
     if [ ! -d "$clone/.git" ]; then
         if [ -e "$clone" ]; then log "$USER_NAME: $clone exists and is not a git checkout; skipping source $url"; continue; fi
-        log "$USER_NAME: cloning $url ($ref) into $clone"
-        if [ "$DRY" -eq 1 ]; then echo "  would: git clone --branch $ref $url $clone"; continue; fi
-        if ! as_user git clone -q --branch "$ref" "$url" "$clone" 2>/dev/null; then
-            log "$USER_NAME: clone of $url failed; will retry next run"; continue
+        if [ -n "$sparse" ]; then
+            # shellcheck disable=SC2086
+            dirs="$(printf '%s' "$subdir,$sparse" | tr ',' ' ')"
+            log "$USER_NAME: cloning $url ($ref) into $clone (blobless, sparse: $dirs)"
+            if [ "$DRY" -eq 1 ]; then echo "  would: git clone --filter=blob:none --no-checkout --branch $ref $url $clone; sparse-checkout set --cone $dirs; checkout $ref"; continue; fi
+            # shellcheck disable=SC2086
+            if ! { as_user git clone -q --filter=blob:none --no-checkout --branch "$ref" "$url" "$clone" \
+                   && as_user git -C "$clone" sparse-checkout set --cone $dirs \
+                   && as_user git -C "$clone" checkout -q "$ref"; } 2>/dev/null; then
+                log "$USER_NAME: sparse clone of $url failed; removing the partial clone, will retry next run"
+                as_user rm -rf -- "$clone"; continue
+            fi
+        else
+            log "$USER_NAME: cloning $url ($ref) into $clone"
+            if [ "$DRY" -eq 1 ]; then echo "  would: git clone --branch $ref $url $clone"; continue; fi
+            if ! as_user git clone -q --branch "$ref" "$url" "$clone" 2>/dev/null; then
+                log "$USER_NAME: clone of $url failed; will retry next run"; continue
+            fi
         fi
     elif [ "$FETCH" -eq 1 ]; then
         branch="$(as_user git -C "$clone" symbolic-ref --short -q HEAD 2>/dev/null || echo DETACHED)"
@@ -126,8 +158,24 @@ while read -r url ref subdir _; do
         skill="$(basename "$d")"
         dst="$skills_dir/$skill"
         rel="../../$name/$subdir/$skill"
+        case ",$exclude," in *",$skill,"*)
+            if [ -L "$dst" ] && [ "$(readlink "$dst")" = "$rel" ]; then
+                log "$USER_NAME: $skill is now excluded for $name; removing its link"; run rm -f "$dst"
+            fi
+            continue ;;
+        esac
         if [ -L "$dst" ]; then
-            [ "$(readlink "$dst")" = "$rel" ] || { run ln -sfn "$rel" "$dst"; own "$dst"; }
+            cur="$(readlink "$dst")"
+            if [ "$cur" != "$rel" ]; then
+                curfirst="${cur#../../}"; curfirst="${curfirst%%/*}"
+                if [ "$curfirst" = "$name" ]; then
+                    run ln -sfn "$rel" "$dst"; own "$dst"
+                elif [ -n "${clone_dirs[$curfirst]:-}" ]; then
+                    log "$USER_NAME: $skill is already provided by $curfirst (listed first); $name's copy not linked"
+                else
+                    log "$USER_NAME: $skill links elsewhere ($cur); left alone"
+                fi
+            fi
         elif [ -d "$dst" ] && [ -n "$TEMPLATE_SKILLS" ] && [ -d "$TEMPLATE_SKILLS/$skill" ] \
              && diff -rq "$TEMPLATE_SKILLS/$skill" "$dst" >/dev/null 2>&1; then
             # Unmodified copy of the template: nothing is lost by replacing it, and

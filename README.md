@@ -154,9 +154,14 @@ cloud-init (never committed, never in the repo's history):
   box through a still-open WebSocket.
 - **Where skills come from, and how changes reach curators (since 2026-09-28).**
   Skills live in their own repositories, listed one per line in
-  `skill-sources.txt` (geneontology/go-skills first). Every seeded account holds
-  a real git clone of each source in its home (`~/go-skills`), owned by the
-  user, and `~/.claude/skills/<skill>` is a relative symlink into that clone.
+  `skill-sources.txt` (geneontology/go-skills first, geneontology/go-ontology
+  second). Every seeded account holds a real git clone of each source in its
+  home (`~/go-skills`, `~/go-ontology`), owned by the user, and
+  `~/.claude/skills/<skill>` is a relative symlink into that clone. A source
+  can be cloned blobless and sparse (`sparse=` option: go-ontology comes as its
+  skills plus `src/ontology`, about 210 MB instead of gigabytes) and can leave
+  skills out (`exclude=`: the two that need the ODK Docker image). Two sources
+  offering the same skill name: the first listed wins, the other is logged.
   Everything for everyone: no per-template list. The timer
   (`go-jupyter-sync-skills`) checks each source's ref with one `ls-remote` per
   tick and, when it moved, runs `go-jupyter-link-skills` for every user: a

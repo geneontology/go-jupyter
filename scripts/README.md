@@ -55,7 +55,7 @@ to log in starts to bite. Not yet implemented.
 
 | Template file | Reaches existing homes via | When |
 |---|---|---|
-| skills from `skill-sources.txt` (go-skills, …) | `go-jupyter-link-skills <user>` — a clone per source in the home, links in `~/.claude/skills`; run by `go-jupyter-sync-skills` (timer), `refresh-user`, and first login | ~5 min after a source's ref moves; clean clones fast-forward, edited clones are left alone |
+| skills from `skill-sources.txt` (go-skills, go-ontology) | `go-jupyter-link-skills <user>` — a clone per source in the home (`sparse=` makes it blobless and limited to named directories; `exclude=` leaves skills out; first source wins a name collision), links in `~/.claude/skills`; run by `go-jupyter-sync-skills` (timer), `refresh-user`, and first login | ~5 min after a source's ref moves; clean clones fast-forward, edited clones are left alone |
 | template-carried skills `user-templates/*/.claude/skills/**` (now only the tutorial's `exercise`, `recap`) | `go-jupyter-sync-skills` | per skill dir, never over a link; backups kept; if go-skills starts serving one, `link-skills` swaps an unmodified copy for the link (copy kept under `refresh-backups/`), then the template copy can be deleted |
 | `news/**` | `go-jupyter-sync-skills` | same; shown at the next session start if changed |
 | `CLAUDE.md`, `README.md`, `.bashrc`, `.mcp.json` | `sudo go-jupyter-refresh-user <user>|--all` | only when an operator runs it (`--dry-run` first) |

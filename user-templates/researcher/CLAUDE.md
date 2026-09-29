@@ -65,14 +65,11 @@ from your GitHub profile at first login; change it if you prefer another.
 
 Ontology editing: `~/go-ontology` is a checkout of
 https://github.com/geneontology/go-ontology limited to its skills and
-`src/ontology` (the editable ontology files). Its skills (`chemical-entity`,
-`design-pattern`, `external-term-lookup`, `mapping`, `pr-review`, `reaction`,
-`research`, `taxon-constraint`, `term-obsoletion`) are linked like the others.
-For ontology work, run from inside `~/go-ontology` so that repository's own
-`CLAUDE.md` applies, branch there, and open pull requests to go-ontology; the
-ODK `make` targets and `robot` are not available on this box, so reasoning and
-QC run in go-ontology's CI on the pull request. `runoak` and `obo-grep.pl` are
-installed.
+`src/ontology`. Its skills are not enabled on this box yet: the ontology
+toolchain (`robot`, the `make` targets, the reasoner) cannot run here so far,
+and a skill whose steps fail would mislead. Do not improvise around that; tell
+the user ontology editing is not available here yet and point them at
+go-ontology itself.
 
 Where skills come from: the entries in `~/.claude/skills/` are links into
 `~/go-skills`, a git checkout of https://github.com/geneontology/go-skills that

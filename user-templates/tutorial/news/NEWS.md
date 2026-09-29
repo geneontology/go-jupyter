@@ -6,15 +6,14 @@ way.
 
 ---
 
-## 2026-09-29 — Ontology editing skills from geneontology/go-ontology
+## 2026-09-29 — Ontology editing: being set up, not usable yet
 
-A second skills checkout, `~/go-ontology`, holds the GO ontology's own agent
-skills (chemical entities, design patterns, external term lookup, mappings,
-pull-request review, reactions, research, taxon constraints, term obsoletion)
-together with the editable ontology files under `src/ontology`. They appear as
-skills like the others. For ontology work, start from inside `~/go-ontology`;
-branches and pull requests go to go-ontology, whose CI runs the reasoner and
-QC. The `runoak` and `obo-grep.pl` commands are installed for these skills.
+A checkout of geneontology/go-ontology now sits in your home at `~/go-ontology`
+(its agent skills and the editable ontology files). Its skills are **not yet
+enabled** here: they rely on the ontology toolchain (`robot`, the `make`
+targets, the reasoner), which this machine cannot run yet. They will be
+switched on, with a note here, once that works. Until then, ontology editing
+happens the usual way in go-ontology itself.
 
 ---
 

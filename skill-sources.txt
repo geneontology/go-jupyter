@@ -15,6 +15,9 @@ https://github.com/geneontology/go-skills.git main skills
 # go-ontology (kltm, 2026-09-29): its agent skills for ontology editing, with the
 # editable ontology tree (src/ontology, 173 MB) so the skills have their files
 # and the repo's CLAUDE.md applies when a session runs inside ~/go-ontology.
-# Excluded: the two skills that need the ODK Docker image (no Docker here);
-# taxon-constraint and term-obsoletion keep their non-`make` parts (#60 item 6).
-https://github.com/geneontology/go-ontology.git master .claude/skills sparse=src/ontology exclude=odk-make,souffle-datalog
+# HOLD (kltm, 2026-09-29): all go-ontology skills are excluded until the box can run
+# the ODK toolchain (robot, make targets, souffle) the way go-ontology requires, in
+# the pinned obolibrary/odkfull image. Skills whose steps fail here would confuse
+# curators more than their absence. The checkout stays in every home so the
+# re-enable is a one-line change; runoak and obo-scripts are already installed.
+https://github.com/geneontology/go-ontology.git master .claude/skills sparse=src/ontology exclude=chemical-entity,design-pattern,external-term-lookup,mapping,odk-make,pr-review,reaction,research,souffle-datalog,taxon-constraint,term-obsoletion

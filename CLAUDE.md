@@ -24,9 +24,11 @@ this file for the operating rules.
   Skills are NOT authored in this repo: each user has a clone of every source in
   their home and `~/.claude/skills/<skill>` links into it
   (`scripts/go-jupyter-link-skills`, run by the timer, by `refresh-user`, and at
-  first login). Any skill directories still under `user-templates/*/.claude/skills/`
-  are transitional copies awaiting their move to go-skills (#60). Moving one out
-  is a fixed order: land it in go-skills, let `link-skills` run (it replaces a
+  first login). The only skill directories left under
+  `user-templates/*/.claude/skills/` are the tutorial's workshop-specific ones
+  (`exercise`, `recap`), which stay out of go-skills for now by decision
+  (2026-09-28). Should another skill ever need to move out of a template, the
+  order is fixed: land it in go-skills, let `link-skills` run (it replaces a
   home's copy with the link only when the copy is byte-identical to the
   template's, so the template copy must still be in the repo at that point),
   verify the homes show links, and only then delete the template copy.

@@ -165,13 +165,15 @@ cloud-init (never committed, never in the repo's history):
   `README.md`, `.bashrc` and `.mcp.json` still reach existing homes only via
   `sudo go-jupyter-refresh-user --all` (dry-run first). Verify by looking at
   the homes: `ls -l /home/*/.claude/skills` shows links into `~/go-skills`.
-  Transitional: skills still present as real directories in the template are
-  mirrored per skill directory, never with a whole-directory delete, until
-  go-skills serves them (#60). Once go-skills serves one, `link-skills` replaces
-  a home's copy with the link when the copy is byte-identical to the template's
-  (the copy is kept under `~/.go-jupyter/refresh-backups/`); a copy the curator
-  changed stays, and is logged. Delete the template copy from the repo only
-  after that has happened in every home.
+  Skills that a template still carries as real directories (only the tutorial's
+  workshop-specific `exercise` and `recap`, kept out of go-skills by decision)
+  are mirrored per skill directory, never with a whole-directory delete. When
+  go-skills starts serving a skill a template also carries, `link-skills`
+  replaces a home's copy with the link once the copy is byte-identical to the
+  template's (the copy is kept under `~/.go-jupyter/refresh-backups/`); a copy
+  the curator changed stays, and is logged. Delete the template copy from the
+  repo only after that has happened in every home. The seven GO-CAM skills went
+  through exactly this on 2026-09-28.
 - **The drop-box save is a two-file export from noctua-dev (since 2026-09-24).**
   The contract itself lives in
   [`geneontology/go-cam-drop-box`](https://github.com/geneontology/go-cam-drop-box)

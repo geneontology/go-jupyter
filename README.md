@@ -191,7 +191,7 @@ cloud-init (never committed, never in the repo's history):
   release at first boot; after that `go-jupyter-update-claude.timer` moves it
   (hourly check, newest release at least two days old, only while no session is
   mid-turn; `touch /etc/go-jupyter/hold-claude` freezes it, see `scripts/`).
-  Because sessions run on the `fable` and `opus` model aliases, this is also how
+  Because sessions run on the `opus` and `sonnet` model aliases, this is also how
   curators reach newer models.
 - **Port 8000 is not loopback-only.** `jupyterhub_config.py` sets no
   `bind_url`, so the proxy listens on all interfaces; only the security group

@@ -41,13 +41,13 @@ def _anthropic_backend(env):
         return
     with open(ANTHROPIC_API_KEY_FILE) as f:
         env['ANTHROPIC_API_KEY'] = f.read().strip()
-    # Primary model: the 'fable' alias, which Claude Code resolves to the
-    # current Fable release on the Anthropic API (so upgrading Claude Code on
-    # the box moves users to newer Fable models without a config change). The
-    # availability fallback chain ('opus' alias) lives in
-    # /etc/claude-code/managed-settings.json (see terraform/user_data.sh.tpl);
-    # Claude Code's content-based fallback from Fable is automatic.
-    env['ANTHROPIC_MODEL'] = 'fable'
+    # Primary model: the 'opus' alias, which Claude Code resolves to the
+    # current Opus release on the Anthropic API (so upgrading Claude Code on
+    # the box moves users to newer Opus models without a config change).
+    # Decision 2026-09-29 (#24): Opus is the main driver, replacing Fable
+    # primary with Opus fallback. The availability fallback ('sonnet' alias)
+    # lives in /etc/claude-code/managed-settings.json (terraform/user_data.sh.tpl).
+    env['ANTHROPIC_MODEL'] = 'opus'
     env['ANTHROPIC_SMALL_FAST_MODEL'] = 'claude-haiku-4-5'
     env['CLAUDE_CODE_SUBAGENT_MODEL'] = 'claude-haiku-4-5'
 

@@ -56,16 +56,16 @@ npm install -g @anthropic-ai/claude-code configurable-http-proxy
 #   * disable auto-updates (users can't write to /usr/lib/node_modules, and
 #     mid-workshop updates are undesirable);
 #   * fallbackModel: when the primary model (ANTHROPIC_MODEL, set in
-#     jupyterhub_config.py) is overloaded or unavailable, retry the turn on
-#     the current Opus release (the 'opus' alias tracks it). Fable's
-#     content-based fallback is built into Claude Code.
+#     jupyterhub_config.py; the 'opus' alias since 2026-09-29, #24) is
+#     overloaded or unavailable, retry the turn on the current Sonnet release
+#     (the 'sonnet' alias tracks it). Claude Code shows a notice when it does.
 # NOTE: this file is only written at first boot. To change it on a running
 # box, edit /etc/claude-code/managed-settings.json in place as well; editing
 # only this template changes user_data, which Terraform treats as an instance
 # replacement (blocked by prevent_destroy).
 mkdir -p /etc/claude-code
 cat > /etc/claude-code/managed-settings.json <<'MANAGED_SETTINGS_EOF'
-{"autoUpdatesDisabled": true, "fallbackModel": ["opus"]}
+{"autoUpdatesDisabled": true, "fallbackModel": ["sonnet"]}
 MANAGED_SETTINGS_EOF
 
 # uv, system-wide.

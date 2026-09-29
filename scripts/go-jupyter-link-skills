@@ -15,17 +15,26 @@
 #     changes, is left exactly as it is (and logged): that is a curator editing a
 #     skill, and their work is the raw material for the future "dreaming" process
 #     that turns local skill edits into go-skills PRs.
-#   * NEVER REPLACES A REAL DIRECTORY. If ~/.claude/skills/<skill> is a directory
-#     rather than a link (a template copy during the transition, or a skill the
-#     curator authored), it is skipped and logged. Nothing here deletes a
-#     directory.
+#   * A REAL DIRECTORY IS REPLACED ONLY WHEN IT IS AN UNMODIFIED TEMPLATE COPY.
+#     If ~/.claude/skills/<skill> is a directory rather than a link, it is compared
+#     with the go-jupyter template's copy of the same skill
+#     (user-templates/<tmpl>/.claude/skills/<skill>, <tmpl> from ~/.seeded). Byte-
+#     identical: it is moved to ~/.go-jupyter/refresh-backups/<ts>/ and the link
+#     takes its place (that is how a skill moves out of the template: land it in
+#     go-skills, let this run, THEN delete the template copy). Anything else (a
+#     copy the curator changed, a skill they authored, no template copy to compare
+#     with) is left as it is and logged. Nothing here deletes a directory.
 #   * LINK HYGIENE. A link that points into one of our clones but whose target no
 #     longer exists (skill removed upstream) is removed. Links elsewhere are not
 #     touched.
 #   * Respects ~/.go-jupyter/hold-skills (skips the user).
 #
 # Usage: go-jupyter-link-skills <user> [--no-fetch] [--sources FILE] [--dry-run]
+#                                      [--template-skills DIR]
 #        go-jupyter-link-skills --home DIR [...]     (non-root testing only)
+#   --template-skills DIR  the template skills directory to compare real
+#                          directories with (default: derived from ~/.seeded;
+#                          none in --home mode unless given)
 #
 # Callers: go-jupyter-sync-skills (timer), go-jupyter-refresh-user, and the hub's
 # first-login seed (jupyterhub_config.py). Exit 0 unless the arguments are wrong.
@@ -33,17 +42,21 @@
 set -euo pipefail
 
 SOURCES=/opt/go-jupyter/skill-sources.txt
+TEMPLATE_ROOT=/opt/go-jupyter/user-templates
+TEMPLATE_SKILLS=""
 FETCH=1
 DRY=0
 USER_NAME=""
 HOME_OVERRIDE=""
+TS="$(date +%Y-%m-%dT%H%M%S)"
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-fetch) FETCH=0 ;;
         --dry-run)  DRY=1 ;;
         --sources)  SOURCES="${2:-}"; shift ;;
         --home)     HOME_OVERRIDE="${2:-}"; shift ;;
-        -h|--help)  sed -n '2,40p' "$0"; exit 0 ;;
+        --template-skills) TEMPLATE_SKILLS="${2:-}"; shift ;;
+        -h|--help)  sed -n '2,48p' "$0"; exit 0 ;;
         -*)         echo "unknown option: $1" >&2; exit 2 ;;
         *)          USER_NAME="$1" ;;
     esac
@@ -69,6 +82,11 @@ fi
 
 [ -f "$SOURCES" ] || { log "no sources file at $SOURCES; nothing to do"; exit 0; }
 if [ -e "$home/.go-jupyter/hold-skills" ]; then log "hold $USER_NAME (hold-skills present)"; exit 0; fi
+if [ -z "$TEMPLATE_SKILLS" ] && [ -z "$HOME_OVERRIDE" ]; then
+    tmpl="$(head -n1 "$home/.seeded" 2>/dev/null | tr -d '[:space:]')"
+    [ -n "$tmpl" ] || tmpl=researcher
+    TEMPLATE_SKILLS="$TEMPLATE_ROOT/$tmpl/.claude/skills"
+fi
 
 skills_dir="$home/.claude/skills"
 run mkdir -p "$skills_dir"
@@ -110,8 +128,17 @@ while read -r url ref subdir _; do
         rel="../../$name/$subdir/$skill"
         if [ -L "$dst" ]; then
             [ "$(readlink "$dst")" = "$rel" ] || { run ln -sfn "$rel" "$dst"; own "$dst"; }
+        elif [ -d "$dst" ] && [ -n "$TEMPLATE_SKILLS" ] && [ -d "$TEMPLATE_SKILLS/$skill" ] \
+             && diff -rq "$TEMPLATE_SKILLS/$skill" "$dst" >/dev/null 2>&1; then
+            # Unmodified copy of the template: nothing is lost by replacing it, and
+            # the copy is kept anyway (same place refresh-user keeps what it supersedes).
+            bk="$home/.go-jupyter/refresh-backups/$TS/.claude/skills"
+            log "$USER_NAME: $skill is an unmodified template copy; kept under $bk, replaced by the $name link"
+            run as_user mkdir -p "$bk"
+            run as_user mv "$dst" "$bk/$skill"
+            run ln -s "$rel" "$dst"; own "$dst"
         elif [ -e "$dst" ]; then
-            log "$USER_NAME: $skill is a real directory in ~/.claude/skills; not replaced by the $name link"
+            log "$USER_NAME: $skill is a real directory in ~/.claude/skills (not an unmodified template copy); not replaced by the $name link"
         else
             run ln -s "$rel" "$dst"; own "$dst"; log "$USER_NAME: linked $skill -> $rel"
         fi

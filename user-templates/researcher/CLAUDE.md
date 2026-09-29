@@ -43,6 +43,10 @@ Skills available:
   and links the official documentation.
 - **pubmed-eutils** — PubMed/literature search via NCBI E-utilities.
 - **uniprot-database** — UniProt REST: protein search, FASTA, ID mapping.
+- **gene-review** — review a gene's existing GO annotations with the
+  ai4curation/ai-gene-review toolkit: fetches UniProt and GOA data, judges each
+  annotation, writes a validated review YAML. Sets up its own checkout of
+  ai-gene-review on first use.
 - **save-to-drop-box** — submit a finished, production-worthy GO-CAM model to
   the public `geneontology/go-cam-drop-box` repo as a pull request carrying the
   model in both formats (gocam-py YAML + minerva TTL) under its noctua-dev id
@@ -57,7 +61,8 @@ is yours. New and changed skills arrive there automatically while the checkout
 is clean on `main`. To change a skill: edit it in `~/go-skills` on a branch (the
 change is live in this session at once), and open a pull request to go-skills;
 the sync leaves a branch or a dirty tree alone until it is back on a clean
-`main`. Skills that still appear as plain directories there are being moved.
+`main`. A plain directory there (not a link) is one you made or changed
+yourself; the sync never touches it.
 
 MCPs available:
 - **OLS** — Ontology Lookup Service term search (GO, CHEBI, and other

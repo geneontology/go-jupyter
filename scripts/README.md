@@ -56,7 +56,7 @@ to log in starts to bite. Not yet implemented.
 | Template file | Reaches existing homes via | When |
 |---|---|---|
 | skills from `skill-sources.txt` (go-skills, …) | `go-jupyter-link-skills <user>` — a clone per source in the home, links in `~/.claude/skills`; run by `go-jupyter-sync-skills` (timer), `refresh-user`, and first login | ~5 min after a source's ref moves; clean clones fast-forward, edited clones are left alone |
-| transitional `user-templates/*/.claude/skills/**` | `go-jupyter-sync-skills` | per skill dir, never over a link; backups kept; goes away with #60 |
+| transitional `user-templates/*/.claude/skills/**` | `go-jupyter-sync-skills` | per skill dir, never over a link; backups kept; once go-skills serves a skill, `link-skills` swaps an unmodified copy for the link (copy kept under `refresh-backups/`), then the template copy can be deleted (#60) |
 | `news/**` | `go-jupyter-sync-skills` | same; shown at the next session start if changed |
 | `CLAUDE.md`, `README.md`, `.bashrc`, `.mcp.json` | `sudo go-jupyter-refresh-user <user>|--all` | only when an operator runs it (`--dry-run` first) |
 

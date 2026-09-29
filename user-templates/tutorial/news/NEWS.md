@@ -6,6 +6,18 @@ way.
 
 ---
 
+## 2026-09-29 — Ontology editing skills from geneontology/go-ontology
+
+A second skills checkout, `~/go-ontology`, holds the GO ontology's own agent
+skills (chemical entities, design patterns, external term lookup, mappings,
+pull-request review, reactions, research, taxon constraints, term obsoletion)
+together with the editable ontology files under `src/ontology`. They appear as
+skills like the others. For ontology work, start from inside `~/go-ontology`;
+branches and pull requests go to go-ontology, whose CI runs the reasoner and
+QC. The `runoak` and `obo-grep.pl` commands are installed for these skills.
+
+---
+
 ## 2026-09-29 — GitHub from the terminal: no second login
 
 Signing in to the hub with GitHub now also signs in the `gh` command for your

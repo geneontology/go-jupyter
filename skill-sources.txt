@@ -1,6 +1,10 @@
 # Skill sources for the GO AI hub (read by go-jupyter-link-skills; see scripts/README.md).
 #
-# One source per line:  <git url>  <ref>  <subdirectory holding <skill>/SKILL.md dirs>
+# One source per line:  <git url>  <ref>  <subdirectory holding <skill>/SKILL.md dirs>  [options]
+#   options: sparse=<dir>[,<dir>]  blobless clone limited to these directories (+ the
+#                                  skills subdirectory; root files come along)
+#            exclude=<skill>[,..]  skills of this source not to link
+# Name collisions between sources: the source listed first wins.
 #
 # Every seeded account gets a clone of each source in its home (~/<repo name>) and
 # a symlink ~/.claude/skills/<skill> -> that clone, for every skill the source
@@ -8,3 +12,9 @@
 # The clone is the curator's to edit: on a branch, or with local changes, it is
 # left alone by the timer; clean on <ref> it is fast-forwarded.
 https://github.com/geneontology/go-skills.git main skills
+# go-ontology (kltm, 2026-09-29): its agent skills for ontology editing, with the
+# editable ontology tree (src/ontology, 173 MB) so the skills have their files
+# and the repo's CLAUDE.md applies when a session runs inside ~/go-ontology.
+# Excluded: the two skills that need the ODK Docker image (no Docker here);
+# taxon-constraint and term-obsoletion keep their non-`make` parts (#60 item 6).
+https://github.com/geneontology/go-ontology.git master .claude/skills sparse=src/ontology exclude=odk-make,souffle-datalog

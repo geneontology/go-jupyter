@@ -63,9 +63,20 @@ signed in, `gh auth login` is the fallback. The first push of a branch sets its
 upstream, and your commit identity (`git config --global user.name`) was set
 from your GitHub profile at first login; change it if you prefer another.
 
+Ontology editing: `~/go-ontology` is a checkout of
+https://github.com/geneontology/go-ontology limited to its skills and
+`src/ontology` (the editable ontology files). Its skills (`chemical-entity`,
+`design-pattern`, `external-term-lookup`, `mapping`, `pr-review`, `reaction`,
+`research`, `taxon-constraint`, `term-obsoletion`) are linked like the others.
+For ontology work, run from inside `~/go-ontology` so that repository's own
+`CLAUDE.md` applies, branch there, and open pull requests to go-ontology; the
+ODK `make` targets and `robot` are not available on this box, so reasoning and
+QC run in go-ontology's CI on the pull request. `runoak` and `obo-grep.pl` are
+installed.
+
 Where skills come from: the entries in `~/.claude/skills/` are links into
 `~/go-skills`, a git checkout of https://github.com/geneontology/go-skills that
-is yours. New and changed skills arrive there automatically while the checkout
+is yours, and into `~/go-ontology` for the ontology skills. New and changed skills arrive there automatically while the checkout
 is clean on `main`. To change a skill: edit it in `~/go-skills` on a branch (the
 change is live in this session at once), and open a pull request to go-skills
 (its `CONTRIBUTING.md` has the exact steps); the sync leaves a branch or a

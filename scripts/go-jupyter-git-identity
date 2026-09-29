@@ -88,7 +88,7 @@ print(email, name)' "$user" 2>/dev/null || true)
         if [ "$DRY" -eq 1 ]; then echo "  would: git config --global user.email '$email' (as $user)"; else
             as_user git config --global user.email "$email"; fi
     fi
-    log "$user: git identity ${DRY:+(dry-run) }set to $name <$email>"
+    if [ "$DRY" -eq 1 ]; then log "$user: git identity (dry-run) would be set to $name <$email>"; else log "$user: git identity set to $name <$email>"; fi
 }
 
 if [ "$ALL" -eq 1 ]; then

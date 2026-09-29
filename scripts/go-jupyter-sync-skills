@@ -14,10 +14,10 @@
 #   news:    user-templates/<tmpl>/news/ -> ~/.go-jupyter/news/ (hard mirror; the
 #            per-user "seen" marker lives outside that directory on purpose).
 #
-# Transition: skills still present as real directories in the template
-# (user-templates/<tmpl>/.claude/skills/) are mirrored per skill directory, never
-# with a whole-directory --delete, so they cannot remove links or curator-authored
-# skills. They go away once go-skills serves them (geneontology/go-jupyter#60).
+# Template-carried skills (user-templates/<tmpl>/.claude/skills/; since 2026-09-28
+# only the tutorial's workshop-specific exercise/recap, kept out of go-skills by
+# decision) are mirrored per skill directory, never with a whole-directory
+# --delete, so they cannot remove links or curator-authored skills.
 #
 # Design notes that still hold from the rsync era:
 #   * NEVER DESTRUCTIVE. Anything a mirror overwrites is preserved under

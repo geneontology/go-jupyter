@@ -20,8 +20,10 @@ into it. Two things follow:
   automatic updates leave your checkout alone. Reviews are by the go-skills
   admins.
 
-The GO-CAM skills you already had are moving into the same repository; until
-that lands they still appear as plain directories.
+The GO-CAM skills you already had (amigo, noctua, gocam-best-practice,
+pubmed-eutils, uniprot-database, annotate-function, save-to-drop-box) now come
+from go-skills too. The copies you had are kept under
+`~/.go-jupyter/refresh-backups/`; nothing of yours was deleted.
 
 ## 2026-09-24 — Saving to the drop box now sends two files, under the model's noctua-dev id
 

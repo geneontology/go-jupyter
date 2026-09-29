@@ -174,6 +174,9 @@ cloud-init (never committed, never in the repo's history):
   `README.md`, `.bashrc` and `.mcp.json` still reach existing homes only via
   `sudo go-jupyter-refresh-user --all` (dry-run first). Verify by looking at
   the homes: `ls -l /home/*/.claude/skills` shows links into `~/go-skills`.
+  When a change touches both `go-jupyter-link-skills` and `skill-sources.txt`,
+  install the helper on the box before merging: the timer runs the installed
+  helper against the merged file within minutes.
   Skills that a template still carries as real directories (only the tutorial's
   workshop-specific `exercise` and `recap`, kept out of go-skills by decision)
   are mirrored per skill directory, never with a whole-directory delete. When

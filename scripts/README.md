@@ -99,3 +99,36 @@ accounts are skipped and logged. Together with `/etc/gitconfig` (installed from
 `etc/gitconfig`: `gh` as git's credential helper for github.com, `push.autoSetupRemote`),
 this means a session needs only `gh auth login` before `git push` and `gh pr
 create` work (#48). The browser step of that login is #31.
+
+### Diagnosing the gh hand-off
+
+When a curator's `gh auth status` says they are not logged in after a GitHub
+sign-in, check in this order (all as root on the box):
+
+1. Did the sign-in go through GitHub? The hub journal shows
+   `GET /hub/github/oauth_callback … -> /hub/spawn (<user>@…)`. Without that
+   line the browser reused a hub session and no new token was stored.
+2. Is auth state stored, and with which scopes? Decrypt it with the hub's own
+   key (the venv, the env file, and `crypto.decrypt`, which returns a Future, so
+   await it inside an `async def`):
+
+   ```bash
+   set -a; . /etc/jupyterhub/jupyterhub.env; set +a
+   /opt/go-jupyter/.venv/bin/python - <<'EOF'
+   import asyncio
+   from jupyterhub import orm, crypto
+   db = orm.new_session_factory("sqlite:////opt/go-jupyter/jupyterhub.sqlite")()
+   u = orm.User.find(db, "USER")
+   async def main(): return await crypto.decrypt(u.encrypted_auth_state)
+   st = asyncio.run(main())
+   print(sorted(st), st.get("scope"), (st.get("github_user") or {}).get("login"))
+   EOF
+   ```
+
+   GitHub returns the granted scopes as one comma-separated string
+   (`['read:org,repo,user:email']`); the hook splits it (#77). Print scopes and
+   the login, never the token.
+3. Run the hook's command by hand and read gh's stderr:
+   `runuser -u USER -- env HOME=/home/USER gh auth login --hostname github.com --git-protocol https --with-token < tokenfile`
+   (write the token to a root-only temp file from step 2, delete it after).
+4. `~/.go-jupyter/no-gh-token` in the home disables the hand-off for that user.

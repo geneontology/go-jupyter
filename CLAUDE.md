@@ -36,6 +36,9 @@ this file for the operating rules.
   verify the homes show links, and only then delete the template copy.
 - `scripts/`, `systemd/` — boot and runtime helpers (skills sync timer, user
   add/refresh/migrate).
+- `etc/` — files cloud-init installs verbatim: `gitconfig` (system-wide git:
+  gh as credential helper) and `stubs/` (`docker`, `robot` stand-ins that
+  explain the missing ODK toolchain; delete them when Docker arrives, #74).
 
 ## Operating rules
 
@@ -62,6 +65,17 @@ this file for the operating rules.
   any of them. To change one on a running box, change it in the repo *and* put
   the file in place by hand. Edits to `user_data.sh.tpl` reach only boxes built
   after them; the running instance ignores `user_data` drift (see above).
+- **A helper ships before the change that feeds it.** The timer runs whatever
+  `go-jupyter-link-skills` is installed in `/usr/local/sbin`, within five
+  minutes of a merge. If a merge changes both the helper and its input
+  (`skill-sources.txt`), install the new helper on the box first, then merge;
+  the other order runs the old helper on the new input (2026-09-29: it would
+  have full-cloned go-ontology into every home). Same rule for the seed hook
+  in `jupyterhub_config.py`, which needs a hub restart to change.
+- **One PR at a time, based on `main`.** Merges here are done by hand and the
+  base branch is not always deleted; a PR stacked on another branch then merges
+  into that branch instead of `main` (it happened twice on 2026-09-29). Rebase
+  the next PR onto `main` after each merge rather than stacking.
 - **Apply only what you have read.** `terraform plan -out=<file>` first, then
   `terraform apply <file>` as a separate step; never `-auto-approve`, and never
   chain plan and apply in one command. A plan that destroys anything is a
@@ -93,7 +107,10 @@ this file for the operating rules.
   every user for consent at their next sign-in.
 - **Each user is a real Unix account on a shared host.** The hub runs
   privileged to create accounts; treat a hub compromise as a host compromise and
-  keep the box disposable.
+  keep the box disposable. That account boundary is the only isolation between
+  curators: their GitHub token (from the hub sign-in) sits in the home, and the
+  planned Docker access for the ODK toolchain (#74) is root-equivalent by
+  design of the `docker` group. Accepted for now; #75 collects the options.
 
 ## Backends
 

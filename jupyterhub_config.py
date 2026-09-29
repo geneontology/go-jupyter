@@ -427,9 +427,17 @@ if IS_ROOT:
         auth_state is None for PAM logins and when auth_state is disabled."""
         spawner._go_jupyter_github = None
         if auth_state and auth_state.get('access_token'):
+            # GitHub returns the granted scopes as ONE comma-separated string
+            # ("read:org,repo,user:email"); oauthenticator splits on spaces, so
+            # auth_state['scope'] arrives as a one-element list. Split on commas
+            # and whitespace so 'repo' is an element, not a substring.
+            raw = auth_state.get('scope') or []
+            if isinstance(raw, str):
+                raw = [raw]
+            scopes = [s for part in raw for s in re.split(r'[,\s]+', part) if s]
             spawner._go_jupyter_github = {
                 'token': auth_state['access_token'],
-                'scopes': list(auth_state.get('scope') or []),
+                'scopes': scopes,
                 'profile': dict(auth_state.get('github_user') or {}),
             }
 

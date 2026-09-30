@@ -629,5 +629,13 @@ c.Spawner.options_from_form = template_options_from_form
 # Open directly into the lab
 c.Spawner.default_url = '/lab'
 
+# Spawn timeouts. JupyterHub times only spawner.start() and the server's first
+# HTTP answer (defaults 60 s and 30 s); the first-login seed in pre_spawn_hook
+# (clones, identity, gh login) runs before that window and cannot trip it. What
+# can: JupyterLab taking more than 30 s to answer on a loaded 2-core box with
+# many servers up. Generous margins cost nothing when things are fast.
+c.Spawner.start_timeout = 300
+c.Spawner.http_timeout = 120
+
 # Log single-user server output for debugging
 c.Spawner.debug = True

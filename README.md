@@ -37,15 +37,31 @@ describes the hub for curators, with figures from the paper.
 
 ## Writing and sharing skills
 
-Curators' skills come from
-[geneontology/go-skills](https://github.com/geneontology/go-skills) and
-go-ontology, not from this repo. Each home holds an editable clone of each, so a
-curator can change a skill in their own session, try it, and open a pull
-request. [docs/writing-skills.md](docs/writing-skills.md) is the guide: where
-skills come from, how to change or add one, where a new skill belongs, and how
-to use the same skills outside the hub. For how to write a good skill in the
-first place, it points to the
-[AI4Curators skills guide](https://ai4curation.io/aidocs/how-tos/author-skills/).
+Skills are not written in this repo. Two guides already cover them, so this
+section only adds what is particular to the hub:
+
+- **How to write a good skill:** the
+  [AI4Curators skills guide](https://ai4curation.io/aidocs/how-tos/author-skills/).
+- **How to change or propose one from a hub session** (branch, try it, push,
+  pull request, back to `main`): go-skills'
+  [CONTRIBUTING.md](https://github.com/geneontology/go-skills/blob/main/CONTRIBUTING.md).
+
+What the hub adds:
+
+- Curators' skills come from every source in [`skill-sources.txt`](skill-sources.txt):
+  `~/go-skills` and `~/go-ontology` (ontology editing skills; changes go to
+  go-ontology, not go-skills). `ls -l ~/.claude/skills` shows which is which.
+- **A new skill is not linked until the source moves on `main`.** A draft in
+  `~/go-skills/skills/<name>/` on a branch is invisible to Claude until you link
+  it yourself: `ln -s ../../go-skills/skills/<name> ~/.claude/skills/<name>`.
+  If you switch back to `main` before it merges, the next sync removes the
+  dangling link.
+- **A plain directory in `~/.claude/skills/` is a personal skill.** The sync never
+  touches it, and nobody else gets it.
+- Where a new skill belongs: GO curation any curator does → go-skills; ontology
+  editing → go-ontology `.claude/skills/`; one group or model organism database →
+  that group's repository or a personal skill. The tutorial's `exercise` and
+  `recap` stay in `user-templates/tutorial/` by decision.
 
 ## Architecture
 
@@ -247,7 +263,6 @@ cloud-init (never committed, never in the repo's history):
 | `user-templates/` | Starter homes (skills, docs, dotfiles) seeded per user |
 | `scripts/` | Boot/runtime helpers (skills sync, Claude Code updater, user add/refresh/migrate) |
 | `systemd/` | Units for the hub, the skills-sync timer and the Claude Code update timer |
-| `docs/` | Guides for curators: [writing and sharing skills](docs/writing-skills.md) |
 | `justfile` | Common operator commands |
 
 ## License

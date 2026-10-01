@@ -22,8 +22,9 @@ this file for the operating rules.
   README's operating notes).
 - `skill-sources.txt` — the skill repositories (geneontology/go-skills first,
   geneontology/go-ontology second as a blobless sparse clone of its skills and
-  `src/ontology`, two ODK-bound skills excluded; first listed wins a name
-  collision). Skills are NOT authored in this repo: each user has a clone of
+  `src/ontology`, two ODK-bound skills excluded from the personal links, though
+  a session started inside `~/go-ontology` still sees them as project skills;
+  first listed wins a name collision). Skills are NOT authored in this repo: each user has a clone of
   every source in their home and `~/.claude/skills/<skill>` links into it
   (`scripts/go-jupyter-link-skills`, run by the timer, by `refresh-user`, and at
   first login). The only skill directories left under

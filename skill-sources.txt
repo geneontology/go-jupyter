@@ -3,8 +3,11 @@
 # One source per line:  <git url>  <ref>  <subdirectory holding <skill>/SKILL.md dirs>  [options]
 #   options: sparse=<dir>[,<dir>]  blobless clone limited to these directories (+ the
 #                                  skills subdirectory; root files come along)
-#            exclude=<skill>[,..]  skills of this source not to link
-# Name collisions between sources: the source listed first wins.
+#            exclude=<skill>[,..]  skills of this source not to link into ~/.claude/skills
+#                                  (they remain in the checkout, so a session started
+#                                  inside it still sees them as project skills)
+# Name collisions between sources: the source listed first wins, also when the later
+# source had the name first.
 #
 # Every seeded account gets a clone of each source in its home (~/<repo name>) and
 # a symlink ~/.claude/skills/<skill> -> that clone, for every skill the source

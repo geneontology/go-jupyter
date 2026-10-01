@@ -34,10 +34,6 @@ this file for the operating rules.
   home's copy with the link only when the copy is byte-identical to the
   template's, so the template copy must still be in the repo at that point),
   verify the homes show links, and only then delete the template copy.
-- README "Writing and sharing skills" — hub-specific notes only; skill
-  authoring is covered by the AI4Curators guide (ai4curation.io/aidocs, which
-  links back here) and go-skills' CONTRIBUTING.md. Do not duplicate those. Keep
-  the section in step with `skill-sources.txt` and `go-jupyter-link-skills`.
 - `scripts/`, `systemd/` — boot and runtime helpers (skills sync timer, user
   add/refresh/migrate).
 - `etc/` — files cloud-init installs verbatim: `gitconfig` (system-wide git:

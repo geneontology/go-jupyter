@@ -29,6 +29,24 @@ in a Distributed Curation Community* (arXiv:2608.27675,
 brief for this repo: remove technical barriers, introduce capabilities
 gradually, and ground exercises in familiar curation tasks.
 
+The [AI4Curators guides](https://ai4curation.io/aidocs/) are the companion to
+this repo: what agents, skills and harnesses are, and patterns from other
+curation projects. Their
+[GO AI Hub page](https://ai4curation.io/aidocs/case-studies/go-ai-hub/)
+describes the hub for curators, with figures from the paper.
+
+## Writing and sharing skills
+
+Curators' skills come from
+[geneontology/go-skills](https://github.com/geneontology/go-skills) and
+go-ontology, not from this repo. Each home holds an editable clone of each, so a
+curator can change a skill in their own session, try it, and open a pull
+request. [docs/writing-skills.md](docs/writing-skills.md) is the guide: where
+skills come from, how to change or add one, where a new skill belongs, and how
+to use the same skills outside the hub. For how to write a good skill in the
+first place, it points to the
+[AI4Curators skills guide](https://ai4curation.io/aidocs/how-tos/author-skills/).
+
 ## Architecture
 
 ```
@@ -229,6 +247,7 @@ cloud-init (never committed, never in the repo's history):
 | `user-templates/` | Starter homes (skills, docs, dotfiles) seeded per user |
 | `scripts/` | Boot/runtime helpers (skills sync, Claude Code updater, user add/refresh/migrate) |
 | `systemd/` | Units for the hub, the skills-sync timer and the Claude Code update timer |
+| `docs/` | Guides for curators: [writing and sharing skills](docs/writing-skills.md) |
 | `justfile` | Common operator commands |
 
 ## License

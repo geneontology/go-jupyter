@@ -56,7 +56,10 @@ git fetch -q origin main 2>/dev/null || log "git fetch of $REPO failed; continui
 OLD="$(git rev-parse HEAD)"
 NEW="$(git rev-parse origin/main 2>/dev/null || echo "$OLD")"
 if [ "$OLD" != "$NEW" ]; then
-    if ! git diff --quiet "$OLD" "$NEW" -- $SKILL_PATHSPEC $NEWS_PATHSPEC skill-sources.txt; then
+    # Quoted on purpose: git expands the wildcards against both commits; the
+    # shell would expand them against the working tree at OLD and miss a
+    # template directory that first appears in NEW.
+    if ! git diff --quiet "$OLD" "$NEW" -- "$SKILL_PATHSPEC" "$NEWS_PATHSPEC" skill-sources.txt; then
         repo_changed=1
     fi
     git merge --ff-only -q origin/main || { log "ff-only merge failed (drift in $REPO?); skipping"; exit 0; }
@@ -78,10 +81,28 @@ if [ -f "$SOURCES" ]; then
     done < "$SOURCES"
 fi
 
-if [ "$FORCE" -eq 0 ] && [ "$repo_changed" -eq 0 ] && [ "$sources_changed" -eq 0 ]; then
+# 3. Is any seeded home missing a clone of a listed source (a clone that failed,
+#    a home created while the source was unreachable)? Nothing upstream moves
+#    for that, so without this check it would wait for the next unrelated
+#    trigger. Cheap: one directory test per home per source.
+missing_clone=0
+if [ -f "$SOURCES" ]; then
+    while IFS=: read -r name _ uid _ _ home _; do
+        [ "${uid:-0}" -ge 1000 ] 2>/dev/null || continue
+        case "$name" in ubuntu | nobody) continue ;; esac
+        [ -f "$home/.seeded" ] || continue
+        [ -e "$home/.go-jupyter/hold-skills" ] && continue
+        while read -r url _; do
+            case "$url" in ''|'#'*) continue ;; esac
+            [ -d "$home/$(basename "$url" .git)/.git" ] || { missing_clone=1; break 2; }
+        done < "$SOURCES"
+    done < <(getent passwd)
+fi
+
+if [ "$FORCE" -eq 0 ] && [ "$repo_changed" -eq 0 ] && [ "$sources_changed" -eq 0 ] && [ "$missing_clone" -eq 0 ]; then
     exit 0
 fi
-log "run: template=${OLD:0:7}->${NEW:0:7} repo_changed=$repo_changed sources_changed=$sources_changed force=$FORCE"
+log "run: template=${OLD:0:7}->${NEW:0:7} repo_changed=$repo_changed sources_changed=$sources_changed missing_clone=$missing_clone force=$FORCE"
 
 TS="$(date +%Y-%m-%dT%H%M%S)"
 mirrored=0
@@ -118,7 +139,7 @@ while IFS=: read -r name _ uid _ _ home _; do
 
     # Skill sources: clone/fast-forward and (re)link. Fetch only when a ref moved.
     if [ -x "$LINK" ]; then
-        if [ "$sources_changed" -eq 1 ] || [ "$FORCE" -eq 1 ]; then
+        if [ "$sources_changed" -eq 1 ] || [ "$FORCE" -eq 1 ] || [ "$missing_clone" -eq 1 ]; then
             "$LINK" "$name" --sources "$SOURCES" >/dev/null || log "link-skills failed for $name"
         else
             "$LINK" "$name" --sources "$SOURCES" --no-fetch >/dev/null || log "link-skills failed for $name"

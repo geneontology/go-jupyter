@@ -164,10 +164,16 @@ cloud-init (never committed, never in the repo's history):
   offering the same skill name: the first listed wins, the other is logged.
   Everything for everyone: no per-template list. The timer
   (`go-jupyter-sync-skills`) checks each source's ref with one `ls-remote` per
-  tick and, when it moved, runs `go-jupyter-link-skills` for every user: a
-  clone that is clean on its ref is fast-forwarded; one on a branch or with
-  local changes is left alone and logged, because that is a curator editing a
-  skill. Claude Code follows the links and watches the targets, so an edit in
+  tick and, when it moved (or this repo's templates or sources file changed,
+  or a seeded home lacks a clone, or `--force`), runs `go-jupyter-link-skills`
+  for every user: a clone that is clean on its ref is fast-forwarded; one on a
+  branch or with local changes is left alone and logged, because that is a
+  curator editing a skill. Linking, collision handling and dangling-link
+  cleanup happen only on those runs, not on every tick; a skill directory a
+  curator creates on a branch is linked at the next run, or at once by hand
+  with `ln -s ../../go-skills/skills/NAME ~/.claude/skills/NAME`. `exclude=`
+  withholds the personal link only; inside the checkout the skill is still a
+  project skill. Claude Code follows the links and watches the targets, so an edit in
   the clone is live in the session; a running session picks up new upstream
   text on its next invoke of the skill. News still mirrors from the template
   (`news/`) and shows at the next session start. The template `CLAUDE.md`,

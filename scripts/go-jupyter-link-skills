@@ -99,13 +99,21 @@ fi
 
 skills_dir="$home/.claude/skills"
 run mkdir -p "$skills_dir"
+# Every source's clone name, known before the loop: a link that points into a
+# LATER source must still be recognised as ours (so an earlier source can take
+# the name over: first listed wins) and not mistaken for a foreign link.
 declare -A clone_dirs=()
+while read -r url _; do
+    case "$url" in ''|'#'*) continue ;; esac
+    clone_dirs["$(basename "$url" .git)"]=1
+done < "$SOURCES"
+declare -A seen_sources=()
 
 while read -r url ref subdir rest; do
     case "$url" in ''|'#'*) continue ;; esac
     name="$(basename "$url" .git)"
     clone="$home/$name"
-    clone_dirs["$name"]=1
+    seen_sources["$name"]=1
     sparse=""; exclude=""
     for kv in $rest; do
         case "$kv" in
@@ -168,10 +176,14 @@ while read -r url ref subdir rest; do
             cur="$(readlink "$dst")"
             if [ "$cur" != "$rel" ]; then
                 curfirst="${cur#../../}"; curfirst="${curfirst%%/*}"
-                if [ "$curfirst" = "$name" ]; then
-                    run ln -sfn "$rel" "$dst"; own "$dst"
-                elif [ -n "${clone_dirs[$curfirst]:-}" ]; then
+                if [ "$curfirst" = "$name" ] || { [ -n "${clone_dirs[$curfirst]:-}" ] && [ ! -e "$dst" ]; }; then
+                    # ours and stale, or ours and dangling (its provider dropped the skill): retarget
+                    run ln -sfn "$rel" "$dst"; own "$dst"; log "$USER_NAME: relinked $skill -> $rel"
+                elif [ -n "${seen_sources[$curfirst]:-}" ]; then
                     log "$USER_NAME: $skill is already provided by $curfirst (listed first); $name's copy not linked"
+                elif [ -n "${clone_dirs[$curfirst]:-}" ]; then
+                    # points into a source listed AFTER this one: this one wins
+                    run ln -sfn "$rel" "$dst"; own "$dst"; log "$USER_NAME: $skill now from $name (listed before $curfirst)"
                 else
                     log "$USER_NAME: $skill links elsewhere ($cur); left alone"
                 fi

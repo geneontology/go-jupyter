@@ -13,7 +13,8 @@ credential is supplied out-of-band at deploy time (see [Secrets](#secrets)).
 ## Background
 
 GO runs this as the **GO AI Hub**, a closed beta for GO curators at
-<https://jupyter.geneontology.io> (GitHub login, allowlisted from GO's
+<https://ai.geneontology.org> (which redirects to
+`jupyter.geneontology.io`; GitHub login, allowlisted from GO's
 `users.yaml`). Each curator gets a Unix account with JupyterLab, a terminal, and
 Claude Code preloaded with GO-CAM curation skills: Noctua access through
 barista, literature and protein lookups, GO-CAM best practice, and a save path
@@ -28,6 +29,40 @@ in a Distributed Curation Community* (arXiv:2608.27675,
 <https://arxiv.org/abs/2608.27675>, August 2026). Its conclusion is the design
 brief for this repo: remove technical barriers, introduce capabilities
 gradually, and ground exercises in familiar curation tasks.
+
+The [AI4Curators guides](https://ai4curation.io/aidocs/) are the companion to
+this repo: what agents, skills and harnesses are, and patterns from other
+curation projects. Their
+[GO AI Hub page](https://ai4curation.io/aidocs/case-studies/go-ai-hub/)
+describes the hub for curators, with figures from the paper.
+
+## Writing and sharing skills
+
+Skills are not written in this repo. Two guides already cover them, so this
+section only adds what is particular to the hub:
+
+- **How to write a good skill:** the
+  [AI4Curators skills guide](https://ai4curation.io/aidocs/how-tos/author-skills/).
+- **How to change or propose one from a hub session** (branch, try it, push,
+  pull request, back to `main`): go-skills'
+  [CONTRIBUTING.md](https://github.com/geneontology/go-skills/blob/main/CONTRIBUTING.md).
+
+What the hub adds:
+
+- Curators' skills come from every source in [`skill-sources.txt`](skill-sources.txt):
+  `~/go-skills` and `~/go-ontology` (ontology editing skills; changes go to
+  go-ontology, not go-skills). `ls -l ~/.claude/skills` shows which is which.
+- **A new skill is not linked until the source moves on `main`.** A draft in
+  `~/go-skills/skills/<name>/` on a branch is invisible to Claude until you link
+  it yourself: `ln -s ../../go-skills/skills/<name> ~/.claude/skills/<name>`.
+  If you switch back to `main` before it merges, the next sync removes the
+  dangling link.
+- **A plain directory in `~/.claude/skills/` is a personal skill.** The sync never
+  touches it, and nobody else gets it.
+- Where a new skill belongs: GO curation any curator does → go-skills; ontology
+  editing → go-ontology `.claude/skills/`; one group or model organism database →
+  that group's repository or a personal skill. The tutorial's `exercise` and
+  `recap` stay in `user-templates/tutorial/` by decision.
 
 ## Architecture
 

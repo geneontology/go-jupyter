@@ -13,7 +13,8 @@ credential is supplied out-of-band at deploy time (see [Secrets](#secrets)).
 ## Background
 
 GO runs this as the **GO AI Hub**, a closed beta for GO curators at
-<https://jupyter.geneontology.io> (GitHub login, allowlisted from GO's
+<https://ai.geneontology.org> (which redirects to
+`jupyter.geneontology.io`; GitHub login, allowlisted from GO's
 `users.yaml`). Each curator gets a Unix account with JupyterLab, a terminal, and
 Claude Code preloaded with GO-CAM curation skills: Noctua access through
 barista, literature and protein lookups, GO-CAM best practice, and a save path

@@ -226,6 +226,59 @@ cloud-init (never committed, never in the repo's history):
   (80/443/22) keeps it off the internet. Caddy reaches it at `127.0.0.1:8000`,
   so binding it to loopback is a safe hardening if you tighten further.
 
+## How a skill change flows
+
+The box owns no skill text. It owns the arrows that move skills between the
+source repositories and each curator's home; everything inside the go-skills
+box below (writing, proposing, reviewing, merging) is go-skills' own, and the
+same applies to go-ontology for its skills.
+
+```mermaid
+flowchart LR
+  subgraph GS[go-skills: the content]
+    U[main]
+    P[pull request]
+    R[CI + CODEOWNERS review]
+  end
+  subgraph H[a curator's home on the hub]
+    D[clone on main, links in ~/.claude/skills]
+    L[live in the session]
+    E[edited: branch or local changes]
+    N[personal: plain directory]
+  end
+  U -- "helper run, minutes after a merge" --> D
+  D --> L
+  L -- "edit in the clone" --> E
+  E -- "existing skill: at once" --> L
+  E -- "new directory: next helper run, or ln -s" --> L
+  E -- "git push, gh pr create" --> P
+  P --> R
+  R -- "merged" --> U
+  R -- "changes requested" --> E
+  E -- "git switch main, git pull" --> D
+  L -- "directory outside the clone" --> N
+  N -- "move into ~/go-skills" --> E
+```
+
+Facts the picture leaves out:
+
+- A helper run happens when any source's ref moves, when this repo's
+  templates or `skill-sources.txt` change, when a seeded home lacks a clone,
+  or on `go-jupyter-sync-skills --force`. A quiet timer tick does nothing, so
+  "next run" is not "within five minutes" unless something upstream moved.
+- `~/.go-jupyter/hold-skills` in a home makes every run skip that account.
+- A skill deleted upstream leaves a clean clone at the next run and its link
+  is dropped; a curator on a branch keeps the directory and the link until
+  they return to `main`.
+- `exclude=` on a source withholds the personal link only; a session started
+  inside the checkout still sees the skill as a project skill.
+- Any repository a curator clones that has `.claude/skills/` provides those
+  skills to sessions started inside it. That is the only way a repository not
+  listed in `skill-sources.txt` reaches a session, and it reaches one curator.
+- The return half of the loop is manual today: the curator pushes and opens
+  the pull request. Automating it (#72), a feedback command (#25) and usage
+  observation (#36) are open.
+
 ## Repo layout
 
 | Path | What |

@@ -132,3 +132,32 @@ sign-in, check in this order (all as root on the box):
    `runuser -u USER -- env HOME=/home/USER gh auth login --hostname github.com --git-protocol https --with-token < tokenfile`
    (write the token to a root-only temp file from step 2, delete it after).
 4. `~/.go-jupyter/no-gh-token` in the home disables the hand-off for that user.
+
+## Testing `go-jupyter-link-skills` without a box
+
+`--home DIR` runs it as the current user against any directory (refused as
+root). Point it at a sources file whose entries are local repositories and it
+exercises cloning, sparse clones, linking, collisions, exclusions and
+dangling-link cleanup end to end. Two things make local repositories work as
+sources: initialise them with `main` as the branch, and allow partial clones
+when a line uses `sparse=`:
+
+```bash
+T=$(mktemp -d)
+for r in A B; do
+  mkdir -p $T/$r/skills/demo && printf -- '---\nname: demo\n---\n' > $T/$r/skills/demo/SKILL.md
+  git -C $T/$r -c init.defaultBranch=main init -q
+  git -C $T/$r -c user.name=t -c user.email=t@t add -A
+  git -C $T/$r -c user.name=t -c user.email=t@t commit -qm init
+  git -C $T/$r config uploadpack.allowFilter true
+done
+printf 'file://%s main skills\nfile://%s main skills exclude=nothing\n' $T/A $T/B > $T/sources
+mkdir -p $T/home/.go-jupyter
+scripts/go-jupyter-link-skills --home $T/home --sources $T/sources            # A wins `demo`
+scripts/go-jupyter-link-skills --home $T/home --sources $T/sources --no-fetch # second run: no changes
+```
+
+Change a repository, commit, run again, and read the log lines; `--dry-run`
+prints the commands instead of running them. `--template-skills DIR` stands
+in for the template directory when testing the "unmodified template copy is
+swapped for the link" rule.

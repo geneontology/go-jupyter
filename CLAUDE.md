@@ -73,6 +73,15 @@ this file for the operating rules.
   the other order runs the old helper on the new input (2026-09-29: it would
   have full-cloned go-ontology into every home). Same rule for the seed hook
   in `jupyterhub_config.py`, which needs a hub restart to change.
+- **Skill documentation has two homes, and a review checks placement first.**
+  This repo documents delivery: sources, clones, links, helper runs, template
+  exceptions (README, "How a skill change flows"). go-skills documents writing
+  and proposing a skill (its CONTRIBUTING), go-ontology its own. A docs change
+  here that explains authoring belongs there; one in go-skills that explains
+  the box belongs here. When reviewing such text, settle which side each
+  sentence is on before checking the sentences, and check them against the
+  helpers as installed, not from memory (2026-09-30: a review got the
+  placement wrong and two helper defects were found only by the second pass).
 - **One PR at a time, based on `main`.** Merges here are done by hand and the
   base branch is not always deleted; a PR stacked on another branch then merges
   into that branch instead of `main` (it happened twice on 2026-09-29). Rebase

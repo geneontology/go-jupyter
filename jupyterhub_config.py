@@ -609,27 +609,34 @@ if IS_ROOT:
                     pass
 
         # GitHub token hand-off (#31), every spawn, not only the first: if this
-        # spawn follows a GitHub sign-in whose token carries `repo`, log the
-        # user's `gh` in with it, unless gh is already logged in (a login the
-        # user made themselves is left alone) or they opted out with
-        # ~/.go-jupyter/no-gh-token. The token goes exactly where `gh auth
-        # login` puts it (~/.config/gh/hosts.yml, owner-only); `gh auth logout`
-        # removes it, and the next spawn after a fresh sign-in puts it back.
-        # /etc/gitconfig makes gh git's credential helper, so `git push` follows.
-        if github.get('token') and 'repo' in github.get('scopes', []) \
+        # spawn follows a GitHub sign-in whose token carries what pushes and PRs
+        # need, log the user's `gh` in with it, unless gh is already logged in
+        # with a token that has those scopes (a login the user made themselves
+        # is left alone) or they opted out with ~/.go-jupyter/no-gh-token. A
+        # stored login whose scopes fall short (one from before the hub asked
+        # for `workflow`, #83) is replaced by the hub's token. The token goes
+        # exactly where `gh auth login` puts it (~/.config/gh/hosts.yml,
+        # owner-only); `gh auth logout` removes it, and the next spawn after a
+        # fresh sign-in puts it back. /etc/gitconfig makes gh git's credential
+        # helper, so `git push` follows.
+        GH_NEEDED_SCOPES = {'repo', 'workflow'}
+        if github.get('token') and GH_NEEDED_SCOPES <= set(github.get('scopes', [])) \
                 and not os.path.exists(os.path.join(home, '.go-jupyter', 'no-gh-token')):
             as_user = ['runuser', '-u', username, '--', 'env', f'HOME={home}']
             try:
                 status = subprocess.run(
                     as_user + ['gh', 'auth', 'status', '--hostname', 'github.com'],
                     capture_output=True, text=True, timeout=20, check=False)
-                if status.returncode != 0:
+                # gh prints "Token scopes: 'repo', 'read:org', ..." for the active login.
+                have = set(re.findall(r"'([^']+)'", (status.stdout + status.stderr).split('Token scopes:', 1)[1].split('\n', 1)[0])) \
+                    if 'Token scopes:' in status.stdout + status.stderr else set()
+                if status.returncode != 0 or not GH_NEEDED_SCOPES <= have:
                     subprocess.run(
                         as_user + ['gh', 'auth', 'login', '--hostname', 'github.com',
                                    '--git-protocol', 'https', '--with-token'],
                         input=github['token'] + '\n',
                         capture_output=True, text=True, timeout=30, check=False)
-            except (OSError, subprocess.TimeoutExpired):
+            except (OSError, subprocess.TimeoutExpired, IndexError):
                 pass
 
     c.Spawner.pre_spawn_hook = pre_spawn_hook

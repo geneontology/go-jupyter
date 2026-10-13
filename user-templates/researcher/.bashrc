@@ -13,24 +13,32 @@ if [[ $- == *i* ]] && [ -t 0 ]; then
   echo "  Shared, monitored environment — your activity and usage traces/logs"
   echo "  may be reviewed to analyze and improve the service."
 
-  # What's new — shown only when the news has changed since this user last read
-  # it, so a normal session start is unchanged. The "seen" marker deliberately
-  # lives OUTSIDE ~/.go-jupyter/news/ because that directory is a hard mirror
-  # (rsync --delete) and anything inside it is wiped on every sync.
+  # What's new — only the entries added since this user last saw the news
+  # (entries are the "## " headings in NEWS.md, newest first). The "seen"
+  # marker holds the heading of the newest entry already shown; it lives
+  # OUTSIDE ~/.go-jupyter/news/ because that directory is a hard mirror
+  # (rsync --delete). A marker from the older checksum format, or a heading
+  # that has since been pruned from the file, shows the newest entry only.
   _news="$HOME/.go-jupyter/news/NEWS.md"
   _seen="$HOME/.go-jupyter/news-seen"
   if [ -r "$_news" ]; then
-    _sum="$(md5sum "$_news" 2>/dev/null | cut -d' ' -f1)"
-    if [ "$_sum" != "$(cat "$_seen" 2>/dev/null || true)" ]; then
+    _top="$(grep -m1 '^## ' "$_news" 2>/dev/null || true)"
+    _last="$(cat "$_seen" 2>/dev/null || true)"
+    case "$_last" in '## '*) ;; *) _last="" ;; esac   # old checksum marker, or none
+    [ -z "$_last" ] || grep -qxF -- "$_last" "$_news" 2>/dev/null || _last=""   # pruned
+    if [ -n "$_top" ] && [ "$_top" != "$_last" ]; then
       echo "  ─── What's new ─────────────────────────────"
       echo ""
-      sed 's/^/  /' "$_news"
+      awk -v last="$_last" '
+        /^## / { n++; if (last != "" && $0 == last) exit; if (last == "" && n > 1) exit }
+        n >= 1 && $0 != "---" { print "  " $0 }' "$_news"
+      echo "  (all announcements: ~/.go-jupyter/news/NEWS.md)"
       echo ""
       mkdir -p "$(dirname "$_seen")" 2>/dev/null || true
-      printf '%s' "$_sum" > "$_seen" 2>/dev/null || true
+      printf '%s' "$_top" > "$_seen" 2>/dev/null || true
     fi
   fi
-  unset _news _seen _sum
+  unset _news _seen _top _last
 
   echo ""
   read -r choice

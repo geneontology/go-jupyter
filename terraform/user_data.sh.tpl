@@ -140,6 +140,10 @@ GCP_CREDS_EOF
 install -m 0644 /dev/null /etc/default/go-jupyter
 cat > /etc/default/go-jupyter <<'BACKEND_ENV_EOF'
 GO_JUPYTER_BACKEND=${backend}
+# Which `authorizations.<key>.allow-login` in go-site users.yaml admits a
+# person (empty: every entry with a GitHub handle). Read by
+# go-jupyter-refresh-allowlist; change + run it to apply.
+GO_JUPYTER_ALLOWLIST_AUTHORIZATION=${allowlist_authorization}
 BACKEND_ENV_EOF
 
 # First-party Claude API key for the 'anthropic' backend (only written when
@@ -177,33 +181,18 @@ JHUB_ENV_EOF
 # users simply sign in again.
 echo "JUPYTERHUB_CRYPT_KEY=$(openssl rand -hex 32)" >> /etc/jupyterhub/jupyterhub.env
 
-# GitHub OAuth allowlist — fetch geneontology/go-site/metadata/users.yaml
-# from raw.githubusercontent.com and run extract_github_users.py against
-# it. The result is the canonical Tier A allowlist that the production
-# branch of jupyterhub_config.py reads at hub startup. This makes every
-# fresh deployment automatically pick up the current users.yaml with
-# zero operator action; the eventual cron Phase 2 is the same script on
-# a systemd timer + `systemctl reload jupyterhub`.
-#
-# Fail-closed: if the fetch or extraction fails, the file is left empty
-# and the OAuth tier rejects everyone. PAM (Tier B) still works.
+# GitHub OAuth allowlist: who may sign in, from geneontology/go-site
+# metadata/users.yaml, filtered on GO_JUPYTER_ALLOWLIST_AUTHORIZATION (above).
+# go-jupyter-refresh-allowlist fetches, extracts, and replaces
+# /etc/jupyterhub/github_allowed_users.txt atomically (refusing an empty or
+# sharply shrunken list); the hub reads that file at every login, so the
+# hourly timer below keeps access in step with users.yaml with no restart.
+# First run here, before the hub starts; a failure leaves the list empty and
+# OAuth rejects everyone until the timer succeeds.
+install -m 0755 "$REPO_DIR/scripts/go-jupyter-refresh-allowlist" /usr/local/sbin/go-jupyter-refresh-allowlist
 install -m 0644 /dev/null /etc/jupyterhub/github_allowed_users.txt
-if curl -fsSL --retry 3 --retry-delay 2 --max-time 30 \
-    https://raw.githubusercontent.com/geneontology/go-site/master/metadata/users.yaml \
-    -o /tmp/go-site-users.yaml; then
-    if /opt/go-jupyter/scripts/extract_github_users.py /tmp/go-site-users.yaml \
-        > /etc/jupyterhub/github_allowed_users.txt.new; then
-        mv /etc/jupyterhub/github_allowed_users.txt.new \
-           /etc/jupyterhub/github_allowed_users.txt
-    else
-        echo "extract_github_users.py failed; leaving allowlist empty (OAuth rejects all)" >&2
-        rm -f /etc/jupyterhub/github_allowed_users.txt.new
-    fi
-    rm -f /tmp/go-site-users.yaml
-else
-    echo "fetch of go-site users.yaml failed; leaving allowlist empty (OAuth rejects all)" >&2
-fi
-chmod 0644 /etc/jupyterhub/github_allowed_users.txt
+set -a; . /etc/default/go-jupyter; set +a
+/usr/local/sbin/go-jupyter-refresh-allowlist --force || echo "allowlist refresh failed at first boot; OAuth rejects all until the timer succeeds" >&2
 
 install -m 0644 /dev/null /etc/jupyterhub/local_users.txt
 cat > /etc/jupyterhub/local_users.txt <<'LOCAL_USERS_HEADER_EOF'
@@ -348,6 +337,11 @@ systemctl enable --now jupyterhub.service
 # left alone; backups kept; no hub restart). The box half of the "curators PR
 # skills into go-jupyter" flow.
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-link-skills" /usr/local/sbin/go-jupyter-link-skills
+# Allowlist refresh timer (hourly; the script is installed above, before the hub starts).
+install -m 0644 "$REPO_DIR/systemd/go-jupyter-refresh-allowlist.service" /etc/systemd/system/go-jupyter-refresh-allowlist.service
+install -m 0644 "$REPO_DIR/systemd/go-jupyter-refresh-allowlist.timer" /etc/systemd/system/go-jupyter-refresh-allowlist.timer
+systemctl daemon-reload
+systemctl enable --now go-jupyter-refresh-allowlist.timer
 # `just`, the command runner ai4curation/ai-gene-review drives its steps with
 # (gene-review skill; #57). Its bootstrap would otherwise install a private copy
 # per user.

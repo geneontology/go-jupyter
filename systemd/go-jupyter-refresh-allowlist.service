@@ -1,0 +1,14 @@
+[Unit]
+Description=go-jupyter: refresh the GitHub sign-in allowlist from go-site users.yaml
+Documentation=https://github.com/geneontology/go-jupyter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/go-jupyter
+ExecStart=/usr/local/sbin/go-jupyter-refresh-allowlist
+# A guard refusal (exit 1) or fetch failure (exit 2) leaves the current list in
+# place and is logged; the next tick retries.
+SuccessExitStatus=1 2
+Nice=10

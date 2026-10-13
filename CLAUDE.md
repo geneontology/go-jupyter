@@ -59,7 +59,8 @@ this file for the operating rules.
 - **First boot writes things `go-jupyter-update` never touches.** The helpers
   in `/usr/local/sbin`, the systemd units, `/etc/claude-code/managed-settings.json`,
   `/etc/gitconfig` (from `etc/gitconfig`), `/etc/jupyterhub/jupyterhub.env`
-  (including the generated `JUPYTERHUB_CRYPT_KEY`), the system tools the skills call (`runoak` under `/opt/uv-tools`, obo-scripts under
+  (including the generated `JUPYTERHUB_CRYPT_KEY`), `/etc/default/go-jupyter`
+  (backend and `GO_JUPYTER_ALLOWLIST_AUTHORIZATION`), the system tools the skills call (`runoak` under `/opt/uv-tools`, obo-scripts under
   `/opt/obo-scripts`, and until #74 the `docker`/`robot` stand-ins from `etc/stubs/`) and
   the global Claude Code npm install are all written by cloud-init once.
   `go-jupyter-update` pulls the repo and restarts the hub; it does not reinstall
@@ -115,6 +116,18 @@ this file for the operating rules.
   a convenience, not a narrowing: the token can do what the curator can, in
   every process of their session. Changing the scopes makes GitHub re-ask
   every user for consent at their next sign-in.
+- **Who may sign in is `users.yaml`, filtered on one authorization, read at
+  every login (#83).** `go-jupyter-refresh-allowlist` (hourly timer, and by
+  hand) rebuilds `/etc/jupyterhub/github_allowed_users.txt` from go-site's
+  `metadata/users.yaml`, keeping entries whose
+  `authorizations.<GO_JUPYTER_ALLOWLIST_AUTHORIZATION>.allow-login` is true
+  (`go-ai-hub` on GO's box; empty admits every GitHub handle). The hub checks
+  that file at each sign-in, so a change in `users.yaml` is live within the
+  hour, no restart; a removed person keeps their home, is refused at their
+  next sign-in, and keeps a running server until the next hub restart. The
+  script never writes an empty list and refuses one that lost more than half
+  the names unless `--force`; `--dry-run --source <raw URL of a branch>`
+  previews a `users.yaml` change before it merges.
 - **Each user is a real Unix account on a shared host.** The hub runs
   privileged to create accounts; treat a hub compromise as a host compromise and
   keep the box disposable. That account boundary is the only isolation between

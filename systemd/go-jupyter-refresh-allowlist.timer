@@ -1,0 +1,15 @@
+[Unit]
+Description=go-jupyter: hourly refresh of the GitHub sign-in allowlist
+Documentation=https://github.com/geneontology/go-jupyter
+
+[Timer]
+# One small fetch of go-site users.yaml an hour. The hub reads the allowlist at
+# every login, so a change in users.yaml reaches the sign-in page within the
+# hour with no restart. Run it by hand to apply sooner.
+OnBootSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -201,3 +201,9 @@ variable "redirect_zone_name" {
   type        = string
   default     = null
 }
+
+variable "allowlist_authorization" {
+  description = "Key under `authorizations` in go-site users.yaml whose `allow-login: true` admits a person to the hub (GO uses `go-ai-hub`). Empty: every users.yaml entry with a GitHub handle is admitted. Written to /etc/default/go-jupyter; `go-jupyter-refresh-allowlist` applies it hourly and on demand, no restart."
+  type        = string
+  default     = ""
+}

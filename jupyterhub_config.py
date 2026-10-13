@@ -399,8 +399,11 @@ if IS_ROOT:
         # pre_spawn_hook), so `gh pr create` and `git push` need no second
         # GitHub login. Scopes: `repo` is what pushes and PRs need, `read:org`
         # is gh's own minimum for organisation repositories, `user:email` gives
-        # the profile email for the commit identity. Because the scopes grew,
-        # GitHub asks every user for consent once more at their next sign-in.
+        # the profile email for the commit identity, `workflow` lets a push
+        # carry a commit that touches .github/workflows/ (without it, syncing a
+        # fork that is behind a CI change is refused; 2026-10-12, #83). Because
+        # the scopes grew, GitHub asks every user for consent once more at
+        # their next sign-in.
         # Without the key nothing changes: identity-only scope, no token kept.
         # The login handler saves auth_state only when the SUB-authenticator
         # enables it (multiauthenticator binds handlers to the wrapped
@@ -409,7 +412,7 @@ if IS_ROOT:
         # at the first login.
         if os.environ.get('JUPYTERHUB_CRYPT_KEY'):
             github_config['enable_auth_state'] = True
-            github_config['scope'] = ['repo', 'read:org', 'user:email']
+            github_config['scope'] = ['repo', 'read:org', 'user:email', 'workflow']
             c.MultiAuthenticator.enable_auth_state = True
         else:
             import sys as _sys

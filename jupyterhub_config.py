@@ -399,8 +399,11 @@ if IS_ROOT:
         # pre_spawn_hook), so `gh pr create` and `git push` need no second
         # GitHub login. Scopes: `repo` is what pushes and PRs need, `read:org`
         # is gh's own minimum for organisation repositories, `user:email` gives
-        # the profile email for the commit identity. Because the scopes grew,
-        # GitHub asks every user for consent once more at their next sign-in.
+        # the profile email for the commit identity, `workflow` lets a push
+        # carry a commit that touches .github/workflows/ (without it, syncing a
+        # fork that is behind a CI change is refused; 2026-10-12, #83). Because
+        # the scopes grew, GitHub asks every user for consent once more at
+        # their next sign-in.
         # Without the key nothing changes: identity-only scope, no token kept.
         # The login handler saves auth_state only when the SUB-authenticator
         # enables it (multiauthenticator binds handlers to the wrapped
@@ -409,7 +412,7 @@ if IS_ROOT:
         # at the first login.
         if os.environ.get('JUPYTERHUB_CRYPT_KEY'):
             github_config['enable_auth_state'] = True
-            github_config['scope'] = ['repo', 'read:org', 'user:email']
+            github_config['scope'] = ['repo', 'read:org', 'user:email', 'workflow']
             c.MultiAuthenticator.enable_auth_state = True
         else:
             import sys as _sys
@@ -606,27 +609,34 @@ if IS_ROOT:
                     pass
 
         # GitHub token hand-off (#31), every spawn, not only the first: if this
-        # spawn follows a GitHub sign-in whose token carries `repo`, log the
-        # user's `gh` in with it, unless gh is already logged in (a login the
-        # user made themselves is left alone) or they opted out with
-        # ~/.go-jupyter/no-gh-token. The token goes exactly where `gh auth
-        # login` puts it (~/.config/gh/hosts.yml, owner-only); `gh auth logout`
-        # removes it, and the next spawn after a fresh sign-in puts it back.
-        # /etc/gitconfig makes gh git's credential helper, so `git push` follows.
-        if github.get('token') and 'repo' in github.get('scopes', []) \
+        # spawn follows a GitHub sign-in whose token carries what pushes and PRs
+        # need, log the user's `gh` in with it, unless gh is already logged in
+        # with a token that has those scopes (a login the user made themselves
+        # is left alone) or they opted out with ~/.go-jupyter/no-gh-token. A
+        # stored login whose scopes fall short (one from before the hub asked
+        # for `workflow`, #83) is replaced by the hub's token. The token goes
+        # exactly where `gh auth login` puts it (~/.config/gh/hosts.yml,
+        # owner-only); `gh auth logout` removes it, and the next spawn after a
+        # fresh sign-in puts it back. /etc/gitconfig makes gh git's credential
+        # helper, so `git push` follows.
+        GH_NEEDED_SCOPES = {'repo', 'workflow'}
+        if github.get('token') and GH_NEEDED_SCOPES <= set(github.get('scopes', [])) \
                 and not os.path.exists(os.path.join(home, '.go-jupyter', 'no-gh-token')):
             as_user = ['runuser', '-u', username, '--', 'env', f'HOME={home}']
             try:
                 status = subprocess.run(
                     as_user + ['gh', 'auth', 'status', '--hostname', 'github.com'],
                     capture_output=True, text=True, timeout=20, check=False)
-                if status.returncode != 0:
+                # gh prints "Token scopes: 'repo', 'read:org', ..." for the active login.
+                have = set(re.findall(r"'([^']+)'", (status.stdout + status.stderr).split('Token scopes:', 1)[1].split('\n', 1)[0])) \
+                    if 'Token scopes:' in status.stdout + status.stderr else set()
+                if status.returncode != 0 or not GH_NEEDED_SCOPES <= have:
                     subprocess.run(
                         as_user + ['gh', 'auth', 'login', '--hostname', 'github.com',
                                    '--git-protocol', 'https', '--with-token'],
                         input=github['token'] + '\n',
                         capture_output=True, text=True, timeout=30, check=False)
-            except (OSError, subprocess.TimeoutExpired):
+            except (OSError, subprocess.TimeoutExpired, IndexError):
                 pass
 
     c.Spawner.pre_spawn_hook = pre_spawn_hook

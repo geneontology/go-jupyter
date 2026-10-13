@@ -39,22 +39,25 @@ EXTRACT="$REPO/scripts/extract_github_users.py"
 ALLOWLIST=/etc/jupyterhub/github_allowed_users.txt
 SOURCE=https://raw.githubusercontent.com/geneontology/go-site/master/metadata/users.yaml
 AUTH="${GO_JUPYTER_ALLOWLIST_AUTHORIZATION:-}"
+AUTH_GIVEN=0   # --authorization on the command line wins, even when empty
 DRY=0; FORCE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run)       DRY=1 ;;
         --force)         FORCE=1 ;;
         --source)        SOURCE="${2:-}"; shift ;;
-        --authorization) AUTH="${2:-}"; shift ;;
+        --authorization) AUTH="${2:-}"; AUTH_GIVEN=1; shift ;;
         --allowlist)     ALLOWLIST="${2:-}"; shift ;;
         -h|--help)       sed -n '2,34p' "$0"; exit 0 ;;
         *)               echo "unknown argument: $1" >&2; exit 2 ;;
     esac
     shift
 done
-# The timer runs with /etc/default/go-jupyter as EnvironmentFile; by hand, read it.
-if [ -z "$AUTH" ] && [ -f /etc/default/go-jupyter ]; then
-    AUTH="$(sed -n 's/^GO_JUPYTER_ALLOWLIST_AUTHORIZATION=//p' /etc/default/go-jupyter | tail -1)"
+# The timer runs with /etc/default/go-jupyter as EnvironmentFile; by hand, read it
+# (unless --authorization was given, which wins even when empty). Quotes around
+# the value in that file are stripped, as systemd would strip them.
+if [ "$AUTH_GIVEN" -eq 0 ] && [ -z "$AUTH" ] && [ -f /etc/default/go-jupyter ]; then
+    AUTH="$(sed -n 's/^GO_JUPYTER_ALLOWLIST_AUTHORIZATION=//p' /etc/default/go-jupyter | tail -1 | sed -e 's/^["'"'"']//' -e 's/["'"'"']$//')"
 fi
 log() { if [ "$(id -u)" -eq 0 ]; then logger -t go-jupyter-refresh-allowlist -- "$*"; fi; echo "$*"; }
 
@@ -75,9 +78,11 @@ if ! "$EXTRACT" "${args[@]}" "$work/users.yaml" > "$work/new.txt" 2> "$work/err.
 fi
 [ -s "$work/err.txt" ] && log "extractor notes: $(tr '\n' ' ' < "$work/err.txt" | head -c 400)"
 
-names() { grep -v '^#' "$1" 2>/dev/null | grep . | sort -u; }
+# Name lists; every stage tolerates an empty result (under pipefail a grep with
+# no match would otherwise end the script before the empty-list guard runs).
+names() { { grep -v '^#' "$1" 2>/dev/null || true; } | { grep . || true; } | sort -u; }
 names "$work/new.txt" > "$work/new.names"
-names "$ALLOWLIST" > "$work/old.names" || true
+names "$ALLOWLIST" > "$work/old.names"
 new_n=$(wc -l < "$work/new.names"); old_n=$(wc -l < "$work/old.names")
 added="$(comm -13 "$work/old.names" "$work/new.names" | tr '\n' ' ')"
 removed="$(comm -23 "$work/old.names" "$work/new.names" | tr '\n' ' ')"
@@ -106,6 +111,9 @@ if [ -n "$guard" ]; then log "$guard. removed: $removed"; exit 1; fi
 if cmp -s "$work/old.names" "$work/new.names"; then
     exit 0
 fi
-install -m 0644 "$work/new.txt" "$ALLOWLIST.new" && mv -f "$ALLOWLIST.new" "$ALLOWLIST"
+# Unique temp file in the target directory (same filesystem, so the mv is
+# atomic), so a timer tick and a hand run cannot share a half-written file.
+tmp="$(mktemp "$(dirname "$ALLOWLIST")/.$(basename "$ALLOWLIST").XXXXXX")"
+install -m 0644 "$work/new.txt" "$tmp" && mv -f "$tmp" "$ALLOWLIST"
 log "allowlist replaced: $old_n -> $new_n names (authorization=${AUTH:-none}); added: ${added:-none}; removed: ${removed:-none}"
 exit 0

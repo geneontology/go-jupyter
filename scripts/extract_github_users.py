@@ -68,11 +68,12 @@ def extract(path: Path, authorization: str | None = None) -> tuple[list[str], li
         if not isinstance(entry, dict):
             continue
         if authorization:
-            block = (entry.get('authorizations') or {}).get(authorization) or {}
+            auths = entry.get('authorizations')
+            block = auths.get(authorization) if isinstance(auths, dict) else None
             if not isinstance(block, dict) or block.get('allow-login') is not True:
                 continue
-        accounts = entry.get('accounts') or {}
-        gh = accounts.get('github')
+        accounts = entry.get('accounts')
+        gh = accounts.get('github') if isinstance(accounts, dict) else None
         if not gh:
             if authorization:
                 rejected.append((entry.get('nickname') or entry.get('uri') or '?',

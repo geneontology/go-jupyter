@@ -371,8 +371,7 @@ if IS_ROOT:
                 return names
 
             async def check_allowed(self, username, auth_model):
-                if auth_model is None:  # JupyterHub < 5 path, as in oauthenticator
-                    return True
+                # Decided by the file alone, whatever else is passed in.
                 if username.lower() in self._file_allowed():
                     return True
                 self.log.warning(

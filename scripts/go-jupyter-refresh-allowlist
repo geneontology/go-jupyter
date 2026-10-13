@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+#
+# go-jupyter-refresh-allowlist — rebuild /etc/jupyterhub/github_allowed_users.txt
+# from geneontology/go-site metadata/users.yaml.
+#
+# Who may sign in to the hub is decided by that file, read by the hub at every
+# login (jupyterhub_config.py), so replacing it is enough: no restart. Which
+# entries count is GO_JUPYTER_ALLOWLIST_AUTHORIZATION in /etc/default/go-jupyter
+# (e.g. go-ai-hub: entries with authorizations.go-ai-hub.allow-login: true);
+# empty means every entry with a GitHub handle (geneontology/go-jupyter#83).
+#
+# Safety: the file is replaced atomically, never with an empty list, and not
+# with a list that lost more than half of the current names unless --force:
+# a bad fetch or a broken users.yaml must not lock everyone out. Removals are
+# logged by name. A person removed keeps their home and any running server;
+# their next sign-in is refused, and the next hub restart ends their server.
+#
+# Usage: go-jupyter-refresh-allowlist [--dry-run] [--force] [--source URL|FILE]
+#                                     [--authorization KEY] [--allowlist FILE]
+#   --dry-run        print the names that would be added and removed, and which
+#                    removed names currently have a home on this box; write nothing
+#   --force          accept a list that shrinks by more than half (still never empty)
+#   --source         where to read users.yaml (default: go-site master on GitHub);
+#                    a branch's raw URL or a local file, for testing a change
+#   --authorization  override GO_JUPYTER_ALLOWLIST_AUTHORIZATION
+#   --allowlist      the file to compare with and replace (default: the hub's)
+#
+# Runs as root from the hourly timer (go-jupyter-refresh-allowlist.timer), from
+# cloud-init before the hub first starts, and by hand. Exit 0 when the list is
+# current or was replaced; 1 when it was not replaced because of a guard; 2 on
+# a fetch or extraction failure (the old list stays).
+#
+set -euo pipefail
+
+REPO="${GO_JUPYTER_REPO:-/opt/go-jupyter}"
+EXTRACT="$REPO/scripts/extract_github_users.py"
+# Not installed (a laptop test): use the copy next to this script.
+[ -x "$EXTRACT" ] || EXTRACT="$(cd "$(dirname "$0")" && pwd)/extract_github_users.py"
+ALLOWLIST=/etc/jupyterhub/github_allowed_users.txt
+SOURCE=https://raw.githubusercontent.com/geneontology/go-site/master/metadata/users.yaml
+AUTH="${GO_JUPYTER_ALLOWLIST_AUTHORIZATION:-}"
+DRY=0; FORCE=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run)       DRY=1 ;;
+        --force)         FORCE=1 ;;
+        --source)        SOURCE="${2:-}"; shift ;;
+        --authorization) AUTH="${2:-}"; shift ;;
+        --allowlist)     ALLOWLIST="${2:-}"; shift ;;
+        -h|--help)       sed -n '2,34p' "$0"; exit 0 ;;
+        *)               echo "unknown argument: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+# The timer runs with /etc/default/go-jupyter as EnvironmentFile; by hand, read it.
+if [ -z "$AUTH" ] && [ -f /etc/default/go-jupyter ]; then
+    AUTH="$(sed -n 's/^GO_JUPYTER_ALLOWLIST_AUTHORIZATION=//p' /etc/default/go-jupyter | tail -1)"
+fi
+log() { if [ "$(id -u)" -eq 0 ]; then logger -t go-jupyter-refresh-allowlist -- "$*"; fi; echo "$*"; }
+
+work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+case "$SOURCE" in
+    http://*|https://*)
+        if ! curl -fsSL --max-time 60 "$SOURCE" -o "$work/users.yaml"; then
+            log "fetch of $SOURCE failed; allowlist left as is"; exit 2
+        fi ;;
+    *)  [ -f "$SOURCE" ] || { log "no such file: $SOURCE"; exit 2; }
+        cp "$SOURCE" "$work/users.yaml" ;;
+esac
+
+args=()
+[ -n "$AUTH" ] && args=(--authorization "$AUTH")
+if ! "$EXTRACT" "${args[@]}" "$work/users.yaml" > "$work/new.txt" 2> "$work/err.txt"; then
+    log "extract_github_users.py failed; allowlist left as is: $(head -c 300 "$work/err.txt")"; exit 2
+fi
+[ -s "$work/err.txt" ] && log "extractor notes: $(tr '\n' ' ' < "$work/err.txt" | head -c 400)"
+
+names() { grep -v '^#' "$1" 2>/dev/null | grep . | sort -u; }
+names "$work/new.txt" > "$work/new.names"
+names "$ALLOWLIST" > "$work/old.names" || true
+new_n=$(wc -l < "$work/new.names"); old_n=$(wc -l < "$work/old.names")
+added="$(comm -13 "$work/old.names" "$work/new.names" | tr '\n' ' ')"
+removed="$(comm -23 "$work/old.names" "$work/new.names" | tr '\n' ' ')"
+
+guard=""
+if [ "$new_n" -eq 0 ]; then
+    guard="new allowlist is EMPTY (source=$SOURCE authorization=${AUTH:-none}); refusing to write it"
+elif [ "$old_n" -gt 0 ] && [ $((new_n * 2)) -lt "$old_n" ] && [ "$FORCE" -eq 0 ]; then
+    guard="new allowlist has $new_n names, current has $old_n (more than half removed); refusing without --force"
+fi
+
+if [ "$DRY" -eq 1 ]; then
+    echo "source: $SOURCE"; echo "authorization: ${AUTH:-none (every GitHub handle)}"
+    echo "current: $old_n names; new: $new_n names"
+    echo "would add ($(echo $added | wc -w)): ${added:-none}"
+    echo "would remove ($(echo $removed | wc -w)): ${removed:-none}"
+    if [ -n "$removed" ] && [ -d /home ]; then
+        with_home=""; for u in $removed; do [ -d "/home/$u" ] && with_home="$with_home $u"; done
+        echo "removed names that have a home on this box:${with_home:- none}"
+    fi
+    [ -n "$guard" ] && echo "guard: $guard"
+    exit 0
+fi
+if [ -n "$guard" ]; then log "$guard. removed: $removed"; exit 1; fi
+
+if cmp -s "$work/old.names" "$work/new.names"; then
+    exit 0
+fi
+install -m 0644 "$work/new.txt" "$ALLOWLIST.new" && mv -f "$ALLOWLIST.new" "$ALLOWLIST"
+log "allowlist replaced: $old_n -> $new_n names (authorization=${AUTH:-none}); added: ${added:-none}; removed: ${removed:-none}"
+exit 0

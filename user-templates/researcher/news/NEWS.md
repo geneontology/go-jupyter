@@ -6,6 +6,16 @@ way.
 
 ---
 
+## 2026-10-12 — Who can sign in is now a GO permission
+
+Access to this hub is now recorded in GO's `users.yaml` (geneontology/go-site)
+as the `go-ai-hub` permission, the same file that holds Noctua permissions.
+If you are reading this, you have it. The same permission will decide who can
+submit models to the go-cam-drop-box. To add a colleague, ask a GO admin to add
+the permission to their `users.yaml` entry; it takes effect within the hour.
+
+---
+
 ## 2026-09-29 — Ontology editing skills, with one limit
 
 A checkout of geneontology/go-ontology sits in your home at `~/go-ontology`

@@ -86,6 +86,14 @@ gitignored.
 Users log in over HTTPS (PAM accounts you seed, or GitHub OAuth) and land in a
 JupyterLab with a terminal. Each gets a real Unix account on a shared host.
 
+Who may sign in with GitHub comes from go-site's `metadata/users.yaml`: with
+`allowlist_authorization` set (GO uses `go-ai-hub`), the entries whose
+`authorizations.<key>.allow-login` is true; with it empty, every entry that has
+a GitHub handle. `go-jupyter-refresh-allowlist` rebuilds the list hourly and
+the hub reads it at every sign-in, so adding or removing someone is an edit to
+`users.yaml` and nothing on the box. A removed person keeps their home and any
+running server; their next sign-in is refused.
+
 > **Workshop-mode tradeoff, stated plainly.** As shipped, the launcher and the
 > seeded shell start Claude Code with `--dangerously-skip-permissions` (and the
 > launcher additionally with `--trust-workspace`) so non-technical curators

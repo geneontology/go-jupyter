@@ -34,22 +34,23 @@ entries are printed to stderr with a reason.
 ## Where the allowlist actually lives on a deployed instance
 
 **You do not need to run this script as part of any deployment workflow.**
-Cloud-init invokes it automatically at boot:
+On the box it is driven by `go-jupyter-refresh-allowlist`:
 
-1. `curl https://raw.githubusercontent.com/geneontology/go-site/master/metadata/users.yaml`
-2. `extract_github_users.py /tmp/go-site-users.yaml > /etc/jupyterhub/github_allowed_users.txt`
-3. `jupyterhub_config.py` reads `/etc/jupyterhub/github_allowed_users.txt`
-   at hub startup and feeds it to `GitHubOAuthenticator.allowed_users`.
+1. fetch `https://raw.githubusercontent.com/geneontology/go-site/master/metadata/users.yaml`
+2. `extract_github_users.py --authorization $GO_JUPYTER_ALLOWLIST_AUTHORIZATION`
+   (the variable lives in `/etc/default/go-jupyter`; empty means no filter)
+3. replace `/etc/jupyterhub/github_allowed_users.txt` atomically, logging the
+   names added and removed; never with an empty list, and not with one that
+   lost more than half the names unless `--force`
+4. `jupyterhub_config.py` reads that file **at every GitHub sign-in**, so the
+   change is live at once; no restart.
 
-So **every fresh `terraform apply` automatically picks up the current
-state of `users.yaml`** with no operator action. To refresh on a running
-deployment without replacing the instance, use the `go-jupyter-refresh-user`
-helper in this directory (installed to PATH by cloud-init).
-
-A cron-based refresh on the running box (a systemd timer running the
-same fetch + extractor + `systemctl reload jupyterhub`) is a Phase 2
-once newcomer latency between users.yaml updates and people being able
-to log in starts to bite. Not yet implemented.
+It runs from cloud-init before the hub first starts, from
+`go-jupyter-refresh-allowlist.timer` every hour, and by hand.
+`--dry-run` prints who would be added and removed and which removed names have
+a home on the box; `--source <raw URL or file>` previews a `users.yaml` branch
+before it merges. Pass `GO_JUPYTER_REPO=<checkout>` to run it from a laptop
+against local files (it then uses the extractor next to itself).
 
 ## go-jupyter-sync-skills vs go-jupyter-refresh-user — which delivers what
 

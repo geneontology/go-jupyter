@@ -338,16 +338,53 @@ if IS_ROOT:
         # consistent (a handful of go-site users have capitals like
         # 'CY-uniprot' and we want them spawned as 'cy-uniprot'). Subclass
         # rather than fighting traitlets to accept a callable.
+        # Who may sign in: the allowlist file, read at EVERY login (not once
+        # at startup), so `go-jupyter-refresh-allowlist` (hourly timer, from
+        # go-site users.yaml, filtered on the authorization named in
+        # /etc/default/go-jupyter) takes effect without a hub restart, both
+        # ways: a name added appears at its next sign-in, a name removed is
+        # refused at its next sign-in (#83). oauthenticator's own
+        # `allowed_users` is a set fixed at startup and its
+        # `allow_existing_users` is False here, so neither keeps a removed
+        # person in. Running servers are not ended by removal; the next hub
+        # restart does that.
+        GITHUB_ALLOWLIST_FILE = '/etc/jupyterhub/github_allowed_users.txt'
+
         class LowercasedGitHubOAuthenticator(GitHubOAuthenticator):
+            _allowlist_cache = (None, frozenset())  # (mtime, names)
+
             def normalize_username(self, username):
                 return super().normalize_username(username.lower())
 
-        # Source of truth: cloud-init fetches users.yaml from go-site at
-        # boot, runs extract_github_users.py, and writes the result here.
-        #
-        github_allowed_users = _read_username_list(
-            '/etc/jupyterhub/github_allowed_users.txt'
-        )
+            def _file_allowed(self):
+                try:
+                    mtime = os.stat(GITHUB_ALLOWLIST_FILE).st_mtime
+                except OSError:
+                    return frozenset()
+                cached_mtime, names = type(self)._allowlist_cache
+                if cached_mtime != mtime:
+                    names = frozenset(
+                        n.lower() for n in _read_username_list(GITHUB_ALLOWLIST_FILE)
+                    )
+                    type(self)._allowlist_cache = (mtime, names)
+                    self.log.info("github allowlist reloaded: %d names", len(names))
+                return names
+
+            async def check_allowed(self, username, auth_model):
+                if auth_model is None:  # JupyterHub < 5 path, as in oauthenticator
+                    return True
+                if username.lower() in self._file_allowed():
+                    return True
+                self.log.warning(
+                    "GitHub user %r is not in %s; sign-in refused",
+                    username, GITHUB_ALLOWLIST_FILE,
+                )
+                return False
+
+        # Boot-time copy of the same file, kept so JupyterHub's startup
+        # "no allow config" check is satisfied; check_allowed above is what
+        # decides.
+        github_allowed_users = _read_username_list(GITHUB_ALLOWLIST_FILE)
         github_config = {
             'client_id': github_oauth_client_id,
             'client_secret': github_oauth_client_secret,

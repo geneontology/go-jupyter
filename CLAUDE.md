@@ -127,7 +127,11 @@ this file for the operating rules.
   next sign-in, and keeps a running server until the next hub restart. The
   script never writes an empty list and refuses one that lost more than half
   the names unless `--force`; `--dry-run --source <raw URL of a branch>`
-  previews a `users.yaml` change before it merges.
+  previews a `users.yaml` change before it merges. The check runs only at a
+  GitHub sign-in: a hub cookie (14 days) survives restarts and skips sign-in,
+  so neither a removal nor a new OAuth scope reaches a person until their
+  cookie lapses or they log out. Do not report a gate or scope change as
+  "live for everyone" before then.
 - **Each user is a real Unix account on a shared host.** The hub runs
   privileged to create accounts; treat a hub compromise as a host compromise and
   keep the box disposable. That account boundary is the only isolation between

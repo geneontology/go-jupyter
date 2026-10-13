@@ -223,6 +223,18 @@ cloud-init (never committed, never in the repo's history):
   fallback (PAM accounts, revoked tokens). Rolling the scopes forward makes
   GitHub re-ask every user for consent at their next sign-in; announce it in
   `news/`.
+- **Adding or removing a curator (since 2026-10-12).** One edit in go-site
+  `metadata/users.yaml`: a `go-ai-hub` block under the person's
+  `authorizations` (`allow-login: true`; `allow-admin: true` for drop-box
+  maintainers). The hub follows within the hour (`sudo
+  go-jupyter-refresh-allowlist` to apply at once) and the drop box's CI check
+  reads the file live. Two things do not follow by themselves: the drop-box
+  team that gives write access (`gh api -X PUT
+  orgs/geneontology/teams/go-ai-hub/memberships/<login> -f role=member`, and
+  `-X DELETE` to remove), and a removed person's existing hub session, which
+  lasts until their cookie expires (14 days from sign-in) or they log out;
+  rotating `/opt/go-jupyter/jupyterhub_cookie_secret` and restarting ends
+  every session at once. Removal keeps the home.
 - **Claude Code's version is not pinned.** Cloud-init installs the current npm
   release at first boot; after that `go-jupyter-update-claude.timer` moves it
   (hourly check, newest release at least two days old, only while no session is

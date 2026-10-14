@@ -231,7 +231,10 @@ cloud-init (never committed, never in the repo's history):
   reads the file live. Two things do not follow by themselves: the drop-box
   team that gives write access (`gh api -X PUT
   orgs/geneontology/teams/go-ai-hub/memberships/<login> -f role=member`, and
-  `-X DELETE` to remove), and a removed person's existing hub session, which
+  `-X DELETE` to remove; the operator reconciles it by hand on each
+  `users.yaml` change, by decision of 2026-10-13, because an automated sync
+  would need an org-admin credential stored somewhere), and a removed
+  person's existing hub session, which
   lasts until their cookie expires (14 days from sign-in) or they log out;
   rotating `/opt/go-jupyter/jupyterhub_cookie_secret` and restarting ends
   every session at once. Removal keeps the home.

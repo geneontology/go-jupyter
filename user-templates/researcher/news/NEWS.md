@@ -8,7 +8,7 @@ way.
 
 ## 2026-10-14 — Shared skills now update automatically; your own skills stay yours
 
-The skills Claude uses now come straight from GO's shared skills collection, and
+The skills Claude (https://github.com/geneontology/go-skills/tree/main/skills) uses now come straight from GO's shared skills collection, and
 everyone gets the same up-to-date version. When a skill is improved, every
 curator has the new version within minutes. Before this change, each person had
 their own copy, and some copies had quietly stopped updating. Six people were

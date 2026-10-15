@@ -163,8 +163,9 @@ this file for the operating rules.
   Since #95 each user's server is a transient systemd unit with a private
   `/tmp` (`jupyterhub-systemdspawner`, `isolate_tmp`), after a leftover
   `/tmp/req.json` from one curator was posted to noctua-dev by another's
-  session; the units also run with `NoNewPrivileges`. The account boundary
-  itself is unchanged, and a spawner change restarts every server.
+  session. The account boundary itself is unchanged (`disable_user_sudo` is
+  off: its `NoNewPrivileges` breaks `ping`), and a spawner change restarts
+  every server.
 
 ## Backends
 

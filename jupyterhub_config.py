@@ -649,15 +649,18 @@ if IS_ROOT:
     # account), could not overwrite it, and posted that file instead: an edit
     # to someone else's model under the wrong ORCID. PrivateTmp gives each
     # unit a /tmp and /var/tmp that no other account can see, emptied when the
-    # server stops. The environment (backend key, per-user hub token) reaches
-    # the unit through a root-only EnvironmentFile under /run, not the command
-    # line. NoNewPrivileges (disable_user_sudo, the spawner's default) stays
-    # on: no curator has sudo, and it closes setuid escalation inside a
-    # session. Everything set on c.Spawner above still applies. Changing any
-    # of this restarts every server (README, "Operating notes").
+    # server stops or restarts. The environment (backend key, per-user hub
+    # token) reaches the unit through an EnvironmentFile under /run, written
+    # by the hub at mode 0400 in a 0700 directory that systemd hands to that
+    # user: readable by that account only, and never on the command line.
+    # disable_user_sudo is off on purpose: its NoNewPrivileges would also
+    # drop file capabilities, which breaks `ping` on Ubuntu 24.04 (review of
+    # #96), and no curator has sudo to begin with. Everything set on
+    # c.Spawner above still applies. Changing any of this restarts every
+    # server (README, "Operating notes").
     c.JupyterHub.spawner_class = 'systemd'
     c.SystemdSpawner.isolate_tmp = True
-    c.SystemdSpawner.disable_user_sudo = True
+    c.SystemdSpawner.disable_user_sudo = False
 else:
     # Local dev: no user isolation, runs as current user. Keep
     # FirstUseAuthenticator — PAM needs root and the dev path doesn't

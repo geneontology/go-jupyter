@@ -132,18 +132,24 @@ cloud-init (never committed, never in the repo's history):
   a request file one curator's session had left at `/tmp/req.json` was read and
   posted to noctua-dev by another curator's session. What follows from it:
   - A session's `/tmp` and `/var/tmp` are its own and are emptied when the
-    server stops (a hub restart, or the stop button on the hub's control
-    panel; logging out does not stop a server); the template `CLAUDE.md`
-    tells Claude to keep anything that matters under the home. The host's
-    `/tmp` keeps the old leftovers; sessions cannot see them, and nothing
-    deletes them.
+    server stops or its unit is restarted (a hub restart, or the stop button
+    on the hub's control panel; logging out does not stop a server); the
+    template `CLAUDE.md` tells Claude to keep anything that matters under
+    the home. The host's `/tmp` keeps the old leftovers; sessions cannot see
+    them, and nothing deletes them. `/dev/shm` and the home are still shared
+    between a user's own sessions, which is why the template rule is `mktemp`
+    everywhere, never a fixed name.
   - A user's server log is `journalctl -u jupyter-<user>-singleuser`, no longer
     the hub's journal; `systemctl list-units 'jupyter-*'` lists who is up.
-  - The units run with `NoNewPrivileges`, so nothing setuid works inside a
-    session (`sudo`, `su`, `passwd`); no curator has sudo anyway.
+  - The spawner's `disable_user_sudo` is off: its `NoNewPrivileges` also
+    drops file capabilities, which breaks `ping` on Ubuntu 24.04. Nothing
+    about setuid changes from before; no curator has sudo anyway.
   - The hub still stops every unit as it shuts down (`cleanup_servers`), so a
-    restart ends everything as before. A hub that is killed rather than
-    stopped leaves the units running: `systemctl stop 'jupyter-*-singleuser'`.
+    restart ends everything as before, and a hub that starts while units are
+    running reconnects to the ones its database knows. A hub that is killed
+    rather than stopped leaves the units running:
+    `systemctl stop 'jupyter-*-singleuser.service'` (the `.service` suffix
+    matters: a glob without it matches nothing and exits 0).
   - Verify after the deploying restart, once someone has spawned:
     `systemctl show jupyter-<user>-singleuser -p PrivateTmp` prints `yes`, and
     `ls /tmp/systemd-private-*-jupyter-<user>-singleuser-*/tmp` (as root) is
@@ -151,6 +157,9 @@ cloud-init (never committed, never in the repo's history):
   - Deploying it needs nothing by hand: `sudo go-jupyter-update` runs `uv sync`
     (which installs the spawner package from `uv.lock`) and restarts the hub.
     Pick an idle window (next bullet) and merge the `news/` entry with it.
+    The old spawner's servers die with the hub; if the hub had crashed before
+    the update, check `pgrep -af jupyterhub-singleuser` after it stops and
+    end any survivor by hand, or it runs on outside any unit.
 - **Idle is not the same as absent.** Curators leave JupyterLab tabs and
   `claude` processes running for days. To know whether anyone is *working*,
   read the timestamp of the last `user`/`assistant` entry in each

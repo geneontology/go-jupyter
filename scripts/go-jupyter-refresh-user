@@ -75,7 +75,8 @@ fi
 
 TS="$(date +%Y-%m-%dT%H%M%S)"
 DRYFLAG=""
-if [ "$DRY" -eq 1 ]; then DRYFLAG="--dry-run"; fi
+VERB="wrote"
+if [ "$DRY" -eq 1 ]; then DRYFLAG="--dry-run"; VERB="would write"; fi
 
 refresh_one() {
     local user="$1" home tmpl src bkroot del=""
@@ -103,13 +104,13 @@ refresh_one() {
     #    Then the skill sources (skill-sources.txt) are cloned/linked.
     if [ -d "$src/.claude/skills" ]; then
         if [ "$PRUNE" -eq 1 ]; then del="--delete"; fi
-        mkdir -p "$home/.claude/skills"
+        [ "$DRY" -eq 1 ] || mkdir -p "$home/.claude/skills"
         for sd in "$src/.claude/skills"/*/; do
             [ -d "$sd" ] || continue
             sk="$(basename "$sd")"
             [ -L "$home/.claude/skills/$sk" ] && continue
-            rsync -a $DRYFLAG $del --backup --backup-dir="$bkroot/.claude/skills/$sk" \
-                "$sd" "$home/.claude/skills/$sk/"
+            rsync -a -c -i $DRYFLAG $del --backup --backup-dir="$bkroot/.claude/skills/$sk" \
+                "$sd" "$home/.claude/skills/$sk/" | { grep -E '^[>c*]' || true; } | sed "s|^|  $VERB .claude/skills/$sk/|"
         done
     fi
     if [ -x /usr/local/sbin/go-jupyter-link-skills ]; then
@@ -121,10 +122,16 @@ refresh_one() {
     fi
 
     # 2. Top-level template config files (add/update only; previous versions
-    #    backed up). Never --delete these.
+    #    backed up). Never --delete these. -c compares content, not size and
+    #    mtime (a git pull gives every template file a new mtime, which would
+    #    otherwise rewrite and back up identical files in every home); -i
+    #    prints one line per file that is (or, under --dry-run, would be)
+    #    written; lines for attribute-only changes (a new mtime on identical
+    #    content, which rsync still applies) are dropped, so a file that
+    #    already matches the template prints nothing.
     for f in "${CONFIG_FILES[@]}"; do
         [ -e "$src/$f" ] || continue
-        rsync -a $DRYFLAG --backup --backup-dir="$bkroot" "$src/$f" "$home/"
+        rsync -a -c -i $DRYFLAG --backup --backup-dir="$bkroot" "$src/$f" "$home/" | { grep -E '^[>c*]' || true; } | sed "s|^|  $VERB |"
     done
 
     if [ "$DRY" -eq 0 ]; then
@@ -143,7 +150,9 @@ done
 
 echo
 if [ "$DRY" -eq 1 ]; then
-    echo "dry-run: nothing changed."
+    echo "dry-run: nothing was touched. Each 'would write' line above is a file a real run"
+    echo "replaces (previous copy kept under ~user/.go-jupyter/refresh-backups/); a user"
+    echo "with no such line already matches the template."
 else
     echo "done. Any superseded files are under ~user/.go-jupyter/refresh-backups/$TS/"
     echo "New skills take effect on each user's next \`claude\` launch; no restart needed, running sessions unaffected."

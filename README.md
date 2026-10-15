@@ -158,8 +158,12 @@ cloud-init (never committed, never in the repo's history):
     `systemctl show jupyter-<user>-singleuser -P PrivateTmp` prints `yes`
     (`-p` prints `PrivateTmp=yes`), and
     `ls -d /tmp/systemd-private-*-jupyter-<user>-singleuser.service-*/tmp`
-    (as root) is that session's private directory; the unit's full name,
-    with `.service`, is part of it.
+    is that session's private directory; the unit's full name, with
+    `.service`, is part of it, and the glob must be expanded by root (a
+    `sudo -i` shell, not `sudo ls`, since the directory is mode 0700).
+    Verified on the first login after the deploy, 2026-10-15: the unit saw 3
+    entries in `/tmp` against 1078 on the host, and the leftover
+    `/tmp/req.json` was not among them.
   - Deploying it: `sudo go-jupyter-update` runs `uv sync` (which installs the
     spawner package from `uv.lock`) and restarts the hub; then
     `sudo go-jupyter-refresh-user --dry-run --all` and, when the plan reads

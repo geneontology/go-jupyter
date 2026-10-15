@@ -78,7 +78,14 @@ this file for the operating rules.
   (`skill-sources.txt`), install the new helper on the box first, then merge;
   the other order runs the old helper on the new input (2026-09-29: it would
   have full-cloned go-ontology into every home). Same rule for the seed hook
-  in `jupyterhub_config.py`, which needs a hub restart to change.
+  in `jupyterhub_config.py`, which needs a hub restart to change. When the
+  wrong pairing would act on homes (2026-10-14: the store-model helper on the
+  old sources file would have retired every untouched `~/go-ontology` clone),
+  take the timer out first: `systemctl disable --now` (a plain `stop` does
+  not survive a reboot), merge, pull and install together, dry-run the
+  helper on one account and then all, re-enable, and start the service once
+  by hand (a re-enabled timer with only monotonic triggers has no next
+  elapse until its service has run; README).
 - **Skill documentation has two homes, and a review checks placement first.**
   This repo documents delivery: sources, clones, links, helper runs, template
   exceptions (README, "How a skill change flows"). go-skills documents writing
@@ -102,6 +109,16 @@ this file for the operating rules.
   safe only on a disposable, trusted-participant, time-boxed workshop host. For
   anything else, restore permission prompts and per-user credentials (see the
   README's "Workshop mode" note).
+- **Nothing on the box writes to production Noctua, and nothing on it holds
+  a production credential (kltm, 2026-10-14).** Not a default to be argued
+  per case: a prohibition. Reviewing a production model is read-only through
+  Noctua's public download route (`http://noctua.geneontology.org/download/
+  gomodel:<id>/owl`, Turtle despite the name; `/gpad`; no token; HTTP only;
+  the same route on noctua-dev), which is what the go-skills `gocam-review`
+  skill uses. The curator's own writes go to noctua-dev with their own token
+  (the `noctua` skill); edits to a production model are the author's, in
+  Noctua, outside the hub. Enforcement on the box is #3; whether production
+  editing could ever be allowed is #49 and stays open.
 - **The drop-box contract is owned by `geneontology/go-cam-drop-box`; the
   skills (in geneontology/go-skills) implement it.** Since 2026-09-24 a submission is `<dev id>.yaml`
   + `<dev id>.ttl` exported from the stored noctua-dev model; the model's state

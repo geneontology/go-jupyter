@@ -535,6 +535,7 @@ dependencies = [
     { name = "jupyterhub" },
     { name = "jupyterhub-firstuseauthenticator" },
     { name = "jupyterhub-multiauthenticator" },
+    { name = "jupyterhub-systemdspawner" },
     { name = "jupyterlab" },
     { name = "oauthenticator" },
 ]
@@ -544,6 +545,7 @@ requires-dist = [
     { name = "jupyterhub", extras = ["jupyterlab", "notebook"], specifier = ">=5.4.4" },
     { name = "jupyterhub-firstuseauthenticator", specifier = ">=1.1" },
     { name = "jupyterhub-multiauthenticator", specifier = ">=0.4" },
+    { name = "jupyterhub-systemdspawner", specifier = ">=1.0" },
     { name = "jupyterlab", specifier = ">=4.5.6" },
     { name = "oauthenticator", specifier = ">=17.0" },
 ]
@@ -940,6 +942,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ac/d8/fff3e1bd023dee0a7a5bd2849bb577741d4349410c9a986e4b35fd0d3ca2/jupyterhub_multiauthenticator-0.4.0.tar.gz", hash = "sha256:56f44742cef11f2bc82c688d48de3917a2ef04a73ec2f720a5a48ed23db4085c", size = 5744, upload-time = "2024-10-20T20:04:13.556Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d6/40/6f001657520f99c37a1703fab95dcb3eee3b69da2672fdd830a6ec23937d/jupyterhub_multiauthenticator-0.4.0-py3-none-any.whl", hash = "sha256:363a94081bbaaf8035dd9a57c82f7da65ce8fa0d3dd1ce69886777b78fd04946", size = 5402, upload-time = "2024-10-20T20:04:12.617Z" },
+]
+
+[[package]]
+name = "jupyterhub-systemdspawner"
+version = "1.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jupyterhub" },
+    { name = "tornado" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0a/bf/300970a1a70d2606da0c213462cf0aa153e25a96f0835ac4ca330f4ea9dc/jupyterhub_systemdspawner-1.0.2.tar.gz", hash = "sha256:b28fdf38c80d5aec47b2093053dfa19ebe53ffd9d4062a5854c737e7fba01e50", size = 17795, upload-time = "2024-10-20T13:41:11.796Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6c/18/99cbc20baa19cc8256ed4fb3c9890d5a0427079fd750653c12ef6d7b27aa/jupyterhub_systemdspawner-1.0.2-py3-none-any.whl", hash = "sha256:b99e78b555b82187a5ee28387d0ebc6ee4e0bdc83cb67f5272c71377cb54c2a4", size = 15012, upload-time = "2024-10-20T13:41:10.252Z" },
 ]
 
 [[package]]

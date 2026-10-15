@@ -306,7 +306,7 @@ if IS_ROOT:
     # Disable multiauthenticator's username prefixing entirely. The default
     # behavior is to prepend `${login_service}:` to every username so PAM
     # `kltm` becomes `local:kltm` and GitHub `kltm` becomes `github:kltm`.
-    # That breaks the LocalProcessSpawner / pre_spawn_hook chain because
+    # That breaks the spawner (one unix account per hub user) because
     # `:` is not a valid POSIX username character. Empty prefix means the
     # two populations share a unix-user namespace — which is what we want
     # for people who log in via both paths (same human, same /home).
@@ -641,6 +641,26 @@ if IS_ROOT:
                 pass
 
     c.Spawner.pre_spawn_hook = pre_spawn_hook
+
+    # Each user's server is a transient systemd unit, jupyter-<user>-singleuser,
+    # with its own /tmp (#95). On 2026-10-14 a session wrote a minerva request
+    # to the fixed path /tmp/req.json, found another curator's file of that
+    # name already there (the host's /tmp was one directory for every
+    # account), could not overwrite it, and posted that file instead: an edit
+    # to someone else's model under the wrong ORCID. PrivateTmp gives each
+    # unit a /tmp and /var/tmp that no other account can see, emptied when the
+    # server stops or restarts. The environment (backend key, per-user hub
+    # token) reaches the unit through an EnvironmentFile under /run, written
+    # by the hub at mode 0400 in a 0700 directory that systemd hands to that
+    # user: readable by that account only, and never on the command line.
+    # disable_user_sudo is off on purpose: its NoNewPrivileges would also
+    # drop file capabilities, which breaks `ping` on Ubuntu 24.04 (review of
+    # #96), and no curator has sudo to begin with. Everything set on
+    # c.Spawner above still applies. Changing any of this restarts every
+    # server (README, "Operating notes").
+    c.JupyterHub.spawner_class = 'systemd'
+    c.SystemdSpawner.isolate_tmp = True
+    c.SystemdSpawner.disable_user_sudo = False
 else:
     # Local dev: no user isolation, runs as current user. Keep
     # FirstUseAuthenticator — PAM needs root and the dev path doesn't

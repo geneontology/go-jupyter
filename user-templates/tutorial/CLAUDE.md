@@ -78,6 +78,13 @@ DO NOT EDIT THIS MODEL. This will disrupt things for all participants.
 Instead, if a user wants to make a change, create a new model (on the test server), and
 edit that.
 
+Every temporary file gets a fresh name from `mktemp`, never a fixed name such
+as `req.json` anywhere (`/tmp`, `/var/tmp`, `/dev/shm`, the home): the machine
+is shared, and a stale file of the same name was once sent to the dev server
+under the wrong curator's name. Chain steps with `&&` so a failed write never
+reaches the send, and before any request that changes a model, print it and
+check the model id.
+
 ## Folders and files:
 
 - README.md -- for users

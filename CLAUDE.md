@@ -160,6 +160,12 @@ this file for the operating rules.
   curators: their GitHub token (from the hub sign-in) sits in the home, and the
   planned Docker access for the ODK toolchain (#74) is root-equivalent by
   design of the `docker` group. Accepted for now; #75 collects the options.
+  Since #95 each user's server is a transient systemd unit with a private
+  `/tmp` (`jupyterhub-systemdspawner`, `isolate_tmp`), after a leftover
+  `/tmp/req.json` from one curator was posted to noctua-dev by another's
+  session. The account boundary itself is unchanged (`disable_user_sudo` is
+  off: its `NoNewPrivileges` breaks `ping`), and a spawner change restarts
+  every server.
 
 ## Backends
 

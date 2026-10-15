@@ -6,6 +6,24 @@ way.
 
 ---
 
+## 2026-10-15 — Each session now has its own private /tmp
+
+On 2026-10-14 a request file one curator's session had left in `/tmp` was picked
+up by another curator's session and sent to noctua-dev with that session's
+token: the first curator's model gained the second curator's name as a
+contributor, and nothing else changed. `/tmp` was one directory shared by every
+account on this machine.
+
+- Your server now has its own `/tmp`, which no other account can see. It is
+  emptied when your server stops, so keep anything you want under your home.
+- Claude is told to create temporary files with `mktemp` or in your home, to
+  stop at the first failed step, and to show you the model id in any request
+  that changes a model before sending it.
+- If you think a model of yours was touched by someone else's session, ask
+  Claude to compare it with your drop-box submission, and tell the operators.
+
+---
+
 ## 2026-10-14 — Shared skills now update automatically; your own skills stay yours
 
 The skills Claude uses now come straight from GO's shared skills collection, and

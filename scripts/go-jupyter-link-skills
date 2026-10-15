@@ -65,6 +65,7 @@ umask 022
 
 SOURCES=/opt/go-jupyter/skill-sources.txt
 STORE=/var/lib/go-jupyter/skill-sources
+TEMPLATE_ROOT=/opt/go-jupyter/user-templates
 FETCH=0
 DRY=0
 VERBOSE=0
@@ -303,9 +304,13 @@ if [ "$set_aside_n" -gt 0 ] && [ "$DRY" -eq 0 ]; then
     as_user touch "$home/.go-jupyter/skill-overrides/.unseen"
 fi
 
-# Links of ours whose skill is no longer provided (removed or excluded upstream).
-# Skipped when any source is missing from the store: a failed clone must not
-# strip a home of its links until the next successful fetch.
+# Links of ours whose skill is no longer provided: a store link under a name no
+# source provides any more (removed or excluded upstream), or an old-layout link
+# (../../<clone>/...) whose target is gone. An old-layout link whose target still
+# exists is a skill living in a clone that was left in place (a curator's draft
+# on a branch): it is theirs and stays. Skipped when any source is missing from
+# the store: a failed clone must not strip a home of its links until the next
+# successful fetch.
 store_complete=1
 for i in "${!src_url[@]}"; do [ -d "$STORE/${src_name[$i]}/${src_sub[$i]}" ] || store_complete=0; done
 if [ "$store_complete" -eq 1 ]; then
@@ -314,17 +319,25 @@ if [ "$store_complete" -eq 1 ]; then
         skill="$(basename "$l")"
         [ -n "${want[$skill]:-}" ] && continue
         t="$(readlink "$l")"
-        if ours_link "$t" "$skill"; then log "$USER_NAME: removing link $skill -> $t (no longer provided)"; run rm -f -- "$l"; fi
+        ours_link "$t" "$skill" || continue
+        case "$t" in
+            "$STORE"/*) log "$USER_NAME: removing link $skill -> $t (no longer provided)"; run rm -f -- "$l" ;;
+            *) if [ ! -e "$l" ]; then log "$USER_NAME: removing dangling link $skill -> $t"; run rm -f -- "$l"; fi ;;
+        esac
     done
 else
     info "$USER_NAME: store incomplete; leaving existing links in place"
 fi
 
-# Personal skills: logged, never touched. The login banner lists them for the user.
+# Personal skills: logged, never touched. The login banner lists them for the
+# user. A template-carried skill (user-templates/<tmpl>/.claude/skills/<name>,
+# <tmpl> from ~/.seeded) is the template's, not the curator's.
+tmpl="$(head -n1 "$home/.seeded" 2>/dev/null | tr -d '[:space:]')"; [ -n "$tmpl" ] || tmpl=researcher
 for d in "$skills_dir"/*/; do
     [ -d "$d" ] && [ ! -L "${d%/}" ] && [ -f "$d/SKILL.md" ] || continue
     skill="$(basename "$d")"
-    [ -n "${want[$skill]:-}" ] || [ -n "${excluded[$skill]:-}" ] || info "$USER_NAME: personal skill $skill (not in any source); left alone"
+    [ -n "${want[$skill]:-}" ] || [ -n "${excluded[$skill]:-}" ] || [ -d "$TEMPLATE_ROOT/$tmpl/.claude/skills/$skill" ] \
+        || info "$USER_NAME: personal skill $skill (not in any source); left alone"
 done
 
 # Workspace clones (kept, the curator's editing surface) and retired clones.

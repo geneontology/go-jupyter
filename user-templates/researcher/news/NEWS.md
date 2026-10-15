@@ -135,5 +135,6 @@ model exists *right now*, not that it will survive.
 **Keep work you care about** by submitting it to the
 [go-cam-drop-box](https://github.com/geneontology/go-cam-drop-box): just ask
 Claude to *"save this to the drop box."* Once the PR is open your work is safe
-and queued for GO Central review. A model does **not** need to be on noctua-dev
-at all to be submitted.
+and queued for GO Central review. The model must be on noctua-dev and
+**stored** first: the drop box takes the YAML and TTL exported from it, under
+its noctua-dev id (see the 2026-09-24 entry above).

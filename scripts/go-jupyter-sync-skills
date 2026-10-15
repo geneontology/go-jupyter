@@ -92,9 +92,10 @@ fi
 store_missing=0
 STORE_DIR=/var/lib/go-jupyter/skill-sources
 if [ -f "$SOURCES" ]; then
-    while read -r url _; do
+    while read -r url _ subdir _; do
         case "$url" in ''|'#'*) continue ;; esac
-        [ -d "$STORE_DIR/$(basename "$url" .git)/.git" ] || { store_missing=1; break; }
+        d="$STORE_DIR/$(basename "$url" .git)"
+        [ -d "$d/.git" ] && [ -d "$d/$subdir" ] || { store_missing=1; break; }
     done < "$SOURCES"
 fi
 

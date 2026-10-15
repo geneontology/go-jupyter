@@ -59,14 +59,17 @@ if [[ $- == *i* ]] && [ -t 0 ]; then
     [ -d "$_d" ] && [ -f "$_d/SKILL.md" ] || continue
     case "$(readlink "${_d%/}" 2>/dev/null)" in /var/lib/go-jupyter/skill-sources/*) continue ;; esac
     [ -d "/opt/go-jupyter/user-templates/$_tmpl/.claude/skills/$(basename "$_d")" ] && continue
-    _personal="$_personal $(basename "$_d")"
+    _n="$(basename "$_d")"; _canon=""
+    for _c in /var/lib/go-jupyter/skill-sources/*/skills/"$_n" /var/lib/go-jupyter/skill-sources/*/.claude/skills/"$_n"; do [ -d "$_c" ] && _canon=1; done
+    [ -n "$_canon" ] && continue
+    _personal="$_personal $_n"
   done
   if [ -n "$_personal" ]; then
     echo "  Your own skills (not in go-skills):$_personal"
     echo "  To share one with every curator, ask Claude to propose it to go-skills."
     echo ""
   fi
-  unset _tmpl _personal _d
+  unset _tmpl _personal _d _n _c _canon
 
   echo ""
   read -r choice

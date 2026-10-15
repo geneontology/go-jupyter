@@ -99,7 +99,7 @@ if [ -n "$HOME_OVERRIDE" ]; then
     [ "$STORE" != /var/lib/go-jupyter/skill-sources ] || { echo "--home needs --store DIR" >&2; exit 2; }
     home="$HOME_OVERRIDE"; USER_NAME="$(id -un)"
     as_user() { "$@"; }
-    own() { :; }
+    own() { [ "$DRY" -eq 1 ] || chown -h "$(id -u):$(id -g)" "$@"; }   # exercises the same path as root
 else
     [ "$(id -u)" -eq 0 ] || { echo "must run as root (try: sudo $0 $*)" >&2; exit 2; }
     if [ -n "$USER_NAME" ]; then
@@ -109,7 +109,7 @@ else
         echo "usage: $0 <user> [--fetch] [--sources FILE] [--store DIR] [--dry-run] | --update-store" >&2; exit 2
     fi
     as_user() { runuser -u "$USER_NAME" -- env HOME="$home" "$@"; }
-    own() { chown -h "$USER_NAME:$USER_NAME" "$@"; }
+    own() { [ "$DRY" -eq 1 ] || chown -h "$USER_NAME:$USER_NAME" "$@"; }
 fi
 
 [ -f "$SOURCES" ] || { log "no sources file at $SOURCES; nothing to do"; exit 0; }
@@ -161,7 +161,20 @@ clone_into() {
     fi
 }
 
-store_ok() { [ -d "$1/.git" ] && git -C "$1" rev-parse -q --verify HEAD >/dev/null 2>&1; }
+# A usable checkout has .git, a HEAD, and the skills subdirectory checked out (a
+# clone interrupted before its checkout has the first two and nothing else).
+store_ok() { [ -d "$1/.git" ] && git -C "$1" rev-parse -q --verify HEAD >/dev/null 2>&1 && [ -d "$1/$2" ]; }
+
+# A clone killed before it was moved into place leaves <dir>.tmp.<pid>; once that
+# pid is gone the directory is debris of ours and is removed.
+sweep_tmp() {
+    local t pid
+    for t in "$1".tmp.*; do
+        [ -d "$t" ] || continue
+        pid="${t##*.tmp.}"
+        if ! kill -0 "$pid" 2>/dev/null; then log "removing abandoned clone $t"; run rm -rf -- "$t"; fi
+    done
+}
 
 # ensure_store [update]: every source present in the store; with "update", fetched
 # and fast-forwarded too. The store is ours and nobody edits it, so a fast-forward
@@ -171,7 +184,8 @@ ensure_store() {
     [ -d "$STORE" ] || run mkdir -p "$STORE"
     for i in "${!src_url[@]}"; do
         dir="$STORE/${src_name[$i]}"
-        if ! store_ok "$dir"; then
+        sweep_tmp "$dir"
+        if ! store_ok "$dir" "${src_sub[$i]}"; then
             if [ -e "$dir" ]; then log "store: $dir is not a usable checkout (interrupted clone?); replacing it"; run rm -rf -- "$dir"; fi
             log "store: cloning ${src_url[$i]} (${src_ref[$i]}) into $dir${src_sparse[$i]:+ (blobless, sparse: ${src_sub[$i]},${src_sparse[$i]})}"
             clone_into "$dir" "${src_url[$i]}" "${src_ref[$i]}" "${src_sub[$i]}" "${src_sparse[$i]}" \
@@ -214,13 +228,14 @@ if [ ! -d "$skills_dir" ]; then run mkdir -p "$skills_dir"; own "$skills_dir"; f
 # What every home should have: skill -> store path. First listed source wins a name.
 declare -A want=()
 declare -A provider=()
+declare -A excluded=()
 for i in "${!src_url[@]}"; do
     sdir="$STORE/${src_name[$i]}/${src_sub[$i]}"
     [ -d "$sdir" ] || { log "$USER_NAME: $sdir missing in the store; no skills linked from ${src_name[$i]}"; continue; }
     for d in "$sdir"/*/; do
         [ -f "$d/SKILL.md" ] || continue
         skill="$(basename "$d")"
-        case ",${src_exclude[$i]}," in *",$skill,"*) continue ;; esac
+        case ",${src_exclude[$i]}," in *",$skill,"*) excluded["$skill"]=1; continue ;; esac
         if [ -n "${want[$skill]:-}" ]; then
             info "$USER_NAME: $skill is already provided by ${provider[$skill]} (listed first); ${src_name[$i]}'s copy not linked"
             continue
@@ -230,9 +245,11 @@ for i in "${!src_url[@]}"; do
 done
 
 # A link is ours when it points into the store or into the old per-home layout
-# (../../<clone name>/...), which this script used to create.
-ours_link() {
-    local t="$1" first
+# (../../<clone name>/...) AND carries the target's own name; a link a curator
+# made under another name (an alias) is theirs, whatever it points at.
+ours_link() {   # ours_link <target> <link name>
+    local t="$1" name="$2" first
+    [ "$(basename "$t")" = "$name" ] || return 1
     case "$t" in
         "$STORE"/*) return 0 ;;
         ../../*) first="${t#../../}"; first="${first%%/*}"; [ -n "${clone_names[$first]:-}" ] ;;
@@ -269,7 +286,7 @@ for skill in $(printf '%s\n' "${!want[@]}" | sort); do
     if [ -L "$dst" ]; then
         cur="$(readlink "$dst")"
         [ "$cur" = "$tgt" ] && continue
-        if ours_link "$cur"; then
+        if ours_link "$cur" "$skill"; then
             run ln -sfn "$tgt" "$dst"; own "$dst"; log "$USER_NAME: relinked $skill -> $tgt"
         else
             set_aside "$skill" "a link to $cur"; run ln -s "$tgt" "$dst"; own "$dst"
@@ -297,7 +314,7 @@ if [ "$store_complete" -eq 1 ]; then
         skill="$(basename "$l")"
         [ -n "${want[$skill]:-}" ] && continue
         t="$(readlink "$l")"
-        if ours_link "$t"; then log "$USER_NAME: removing link $skill -> $t (no longer provided)"; run rm -f -- "$l"; fi
+        if ours_link "$t" "$skill"; then log "$USER_NAME: removing link $skill -> $t (no longer provided)"; run rm -f -- "$l"; fi
     done
 else
     info "$USER_NAME: store incomplete; leaving existing links in place"
@@ -307,7 +324,7 @@ fi
 for d in "$skills_dir"/*/; do
     [ -d "$d" ] && [ ! -L "${d%/}" ] && [ -f "$d/SKILL.md" ] || continue
     skill="$(basename "$d")"
-    [ -n "${want[$skill]:-}" ] || info "$USER_NAME: personal skill $skill (not in any source); left alone"
+    [ -n "${want[$skill]:-}" ] || [ -n "${excluded[$skill]:-}" ] || info "$USER_NAME: personal skill $skill (not in any source); left alone"
 done
 
 # Workspace clones (kept, the curator's editing surface) and retired clones.
@@ -339,9 +356,10 @@ for i in "${!src_url[@]}"; do
         branch="$(as_user git -C "$clone" symbolic-ref --short -q HEAD 2>/dev/null || echo DETACHED)"
         modified="$(as_user git -C "$clone" status --porcelain --untracked-files=no 2>/dev/null | head -1 || true)"
         unpushed="$(as_user git -C "$clone" rev-list --count '@{u}..HEAD' 2>/dev/null || echo '?')"
+        stash="$(as_user git -C "$clone" stash list 2>/dev/null | head -1 || true)"
         origin="$(as_user git -C "$clone" remote get-url origin 2>/dev/null || true)"
         origin_ok=""; [ "${origin%/}" = "${src_url[$i]%/}" ] || [ "${origin%.git}" = "${src_url[$i]%.git}" ] && origin_ok=1
-        if [ "$branch" = "$ref" ] && [ -z "$modified" ] && [ "$unpushed" = "0" ] && [ -n "$origin_ok" ]; then
+        if [ "$branch" = "$ref" ] && [ -z "$modified" ] && [ -z "$stash" ] && [ "$unpushed" = "0" ] && [ -n "$origin_ok" ]; then
             retired="$home/.go-jupyter/retired"
             run as_user mkdir -p "$retired"
             if [ "$DRY" -eq 0 ] && [ ! -f "$retired/README.md" ]; then
@@ -358,7 +376,10 @@ README
             run as_user mv -- "$clone" "$retired/$name-$TS"
             log "$USER_NAME: retired $clone -> $retired/$name-$TS (untouched clone; its skills now link from the store)"
         else
-            info "$USER_NAME: $clone left in place (branch=$branch${modified:+, modified files}${unpushed:+, unpushed=$unpushed}${origin_ok:+}${origin_ok:-, origin is not the source}); skills no longer link into it; retire by hand"
+            why="branch=$branch${modified:+, modified files}${stash:+, stash}"
+            [ "$unpushed" = "0" ] || why="$why, unpushed=$unpushed"
+            [ -n "$origin_ok" ] || why="$why, origin is not the source"
+            info "$USER_NAME: $clone left in place ($why); skills no longer link into it; retire by hand"
         fi
     fi
 done

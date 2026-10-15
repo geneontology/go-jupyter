@@ -332,11 +332,12 @@ install -m 0644 "$REPO_DIR/systemd/jupyterhub.service" /etc/systemd/system/jupyt
 systemctl daemon-reload
 systemctl enable --now jupyterhub.service
 
-# Curator-skill CD: a timer that pulls skill updates from the repo and reconciles
-# them into user homes every ~15 min (consumers only; locally-modified skills are
-# left alone; backups kept; no hub restart). The box half of the "curators PR
-# skills into go-jupyter" flow.
+# Skills delivery (#87): the sources in skill-sources.txt are checked out once,
+# root-owned, under /var/lib/go-jupyter/skill-sources (the store), and every home's
+# ~/.claude/skills/<skill> links into it. The store is created here so the first
+# login finds it; the sync timer (installed below, ~5 min) keeps it current.
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-link-skills" /usr/local/sbin/go-jupyter-link-skills
+/usr/local/sbin/go-jupyter-link-skills --update-store || echo "WARN: skill store clone failed at first boot; the sync timer retries" >&2
 # Allowlist refresh timer (hourly; the script is installed above, before the hub starts).
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-refresh-allowlist.service" /etc/systemd/system/go-jupyter-refresh-allowlist.service
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-refresh-allowlist.timer" /etc/systemd/system/go-jupyter-refresh-allowlist.timer

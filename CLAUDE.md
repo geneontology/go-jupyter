@@ -119,6 +119,23 @@ this file for the operating rules.
   (the `noctua` skill); edits to a production model are the author's, in
   Noctua, outside the hub. Enforcement on the box is #3; whether production
   editing could ever be allowed is #49 and stays open.
+- **A model on noctua-dev that another session touched by mistake is put
+  back with minerva's undo, never with an edit (#95, 2026-10-15).** Minerva
+  stamps the token holder's ORCID and the day onto a model on every
+  annotation edit, `remove-annotation` included, so an operator's edit swaps
+  one wrong contributor for another; only the author's own token leaves a
+  clean list that way. `undo`, `redo`, `store` and `reset-model` do not
+  stamp. The per-model undo stack lives in minerva's memory (one event per
+  batch request; only changes that took effect, inverted in reverse order),
+  so the sequence is: `get-undo-redo` (privileged, so it needs a token) to
+  see the events and their owners, `undo` once per event with an export and
+  a diff after each, `store`, then a diff of the public download against the
+  drop-box copy of the model. `reset-model` reloads the stored copy and
+  clears the history: the backout of last resort, and the end of the undo
+  route. A `redo` seen on 2026-10-15 did not restore one declaration axiom,
+  so it is not the backout. The method and the first repair are on #95. An
+  operator's noctua-dev token is needed; it is not on the box and stays out
+  of the repo.
 - **The drop-box contract is owned by `geneontology/go-cam-drop-box`; the
   skills (in geneontology/go-skills) implement it.** Since 2026-09-24 a submission is `<dev id>.yaml`
   + `<dev id>.ttl` exported from the stored noctua-dev model; the model's state

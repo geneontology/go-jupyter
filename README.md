@@ -311,6 +311,11 @@ Facts the picture leaves out:
   2026-10-14: an untouched clone moved to `~/.go-jupyter/retired/`, one with
   work on it was left in place and logged for the operator.
 - `~/.go-jupyter/hold-skills` in a home makes every run skip that account.
+- The timer has only monotonic triggers (`OnBootSec`, `OnUnitActiveSec`).
+  After `systemctl disable --now` and `enable --now` it shows no next elapse
+  until its service has run once: `systemctl start go-jupyter-sync-skills.service`
+  (a quiet run logs nothing), then `systemctl list-timers` shows the next tick
+  (seen 2026-10-15).
 - A skill deleted or excluded upstream loses its link at the next pass.
 - `exclude=` on a source withholds the personal link only; a session started
   inside a workspace clone still sees the skill as a project skill. Likewise any

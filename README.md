@@ -151,15 +151,20 @@ cloud-init (never committed, never in the repo's history):
     `systemctl stop 'jupyter-*-singleuser.service'` (the `.service` suffix
     matters: a glob without it matches nothing and exits 0).
   - Verify after the deploying restart, once someone has spawned:
-    `systemctl show jupyter-<user>-singleuser -p PrivateTmp` prints `yes`, and
-    `ls /tmp/systemd-private-*-jupyter-<user>-singleuser-*/tmp` (as root) is
-    that session's private directory.
-  - Deploying it needs nothing by hand: `sudo go-jupyter-update` runs `uv sync`
-    (which installs the spawner package from `uv.lock`) and restarts the hub.
-    Pick an idle window (next bullet) and merge the `news/` entry with it.
-    The old spawner's servers die with the hub; if the hub had crashed before
-    the update, check `pgrep -af jupyterhub-singleuser` after it stops and
-    end any survivor by hand, or it runs on outside any unit.
+    `systemctl show jupyter-<user>-singleuser -P PrivateTmp` prints `yes`
+    (`-p` prints `PrivateTmp=yes`), and
+    `ls -d /tmp/systemd-private-*-jupyter-<user>-singleuser.service-*/tmp`
+    (as root) is that session's private directory; the unit's full name,
+    with `.service`, is part of it.
+  - Deploying it: `sudo go-jupyter-update` runs `uv sync` (which installs the
+    spawner package from `uv.lock`) and restarts the hub; then
+    `sudo go-jupyter-refresh-user --dry-run --all` and, when the plan reads
+    right, `--all`, because the template `CLAUDE.md` rule reaches existing
+    homes only that way (the `news/` entry follows by itself through the
+    sync timer within minutes). Pick an idle window (next bullet) and merge
+    with it. The old spawner's servers die with the hub; if the hub had
+    crashed before the update, check `pgrep -af jupyterhub-singleuser` after
+    it stops and end any survivor by hand, or it runs on outside any unit.
 - **Idle is not the same as absent.** Curators leave JupyterLab tabs and
   `claude` processes running for days. To know whether anyone is *working*,
   read the timestamp of the last `user`/`assistant` entry in each
@@ -178,8 +183,8 @@ cloud-init (never committed, never in the repo's history):
   2. In a quiet window, `systemctl stop jupyterhub` on the old box. The hub
      stops every `jupyter-<user>-singleuser` unit as it shuts down, and each
      `claude` process runs inside its unit, so this ends them all and nothing
-     can change there afterwards; `systemctl list-units 'jupyter-*'` must come
-     back empty before the next step.
+     can change there afterwards; `systemctl list-units --no-legend 'jupyter-*'`
+     must print nothing before the next step.
   3. `go-jupyter-migrate <old-host>` again for the final delta, then
      `go-jupyter-refresh-user --all` on the new box: the rsync brings the old
      box's copies of the template-owned files (skills, `CLAUDE.md`, `.bashrc`)

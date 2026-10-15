@@ -134,8 +134,8 @@ Every curator has an account on this one machine. Your server has its own
   model id in it** is the model the user is working on. Prefer the `barista`
   commands, which take the model id as an argument, over hand-built batch
   requests; when a batch is unavoidable, build the JSON in a shell variable
-  and pass it inline (`--data-urlencode "requests=$payload"`), not from a
-  file path.
+  and pass it inline (`--data-urlencode "requests=$payload"`), or from a
+  file that `mktemp` just made, never from a fixed path.
 
 ## Where the user's work lives
 

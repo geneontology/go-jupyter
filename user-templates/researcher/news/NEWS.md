@@ -6,26 +6,30 @@ way.
 
 ---
 
-## 2026-10-14 — Skills are now read-only links to go-skills; your own skills stay yours
+## 2026-10-14 — Shared skills now update automatically; your own skills stay yours
 
-The skills Claude uses (`~/.claude/skills/*`) now link into one checkout of
-geneontology/go-skills (and of go-ontology, for the ontology skills) that the
-hub keeps current and nobody can edit. A merge there reaches every home within
-minutes, every time. Until now each home had its own editable clone, and a stray
-file could silently stop it updating: six homes were running weeks-old skills.
+The skills Claude (https://github.com/geneontology/go-skills/tree/main/skills) uses now come straight from GO's shared skills collection, and
+everyone gets the same up-to-date version. When a skill is improved, every
+curator has the new version within minutes. Before this change, each person had
+their own copy, and some copies had quietly stopped updating. Six people were
+working with skills that were weeks out of date.
 
-- To change a skill, ask Claude to open an issue against go-skills, or a pull
-  request from a fork. The linked files cannot be edited, and a copy edited in
-  your home reaches nobody else.
-- `~/go-skills` has left your home: moved to `~/.go-jupyter/retired/` if it was
-  untouched, left in place if you had work on a branch (ask Claude to turn that
-  into a pull request).
-- A skill you wrote yourself in `~/.claude/skills/` is untouched and still works.
-  Ask Claude to propose it to go-skills when you want every curator to have it.
-- If a copy of yours had the same name as a go-skills skill, the hub set it aside
-  under `~/.go-jupyter/skill-overrides/` and the canonical one took over; the
-  login banner says so.
-- `~/go-ontology` is unchanged: it is still your clone for ontology work.
+What this means for you:
+
+- **You can't edit the shared skills directly.** If you want a skill to work
+  differently, tell Claude what you'd like changed. Claude will send the
+  suggestion to the skill maintainers so the fix reaches everyone. A change made
+  only in your own space would reach nobody else.
+- **Your old personal copy of the skills has been put away.** If you had never
+  changed it, it was moved out of sight. If you had unfinished changes in it, it
+  was left where it was, and Claude can help you send those changes to the
+  maintainers.
+- **Skills you wrote yourself are untouched** and still work. If you'd like every
+  curator to have one, ask Claude to propose it for the shared collection.
+- **If one of your skills had the same name as a shared one,** the shared one now
+  takes over and yours has been set aside, not deleted. The welcome message at
+  login tells you if this happened.
+- **Your ontology editing folder (`go-ontology`) has not changed.**
 
 ---
 

@@ -78,6 +78,12 @@ DO NOT EDIT THIS MODEL. This will disrupt things for all participants.
 Instead, if a user wants to make a change, create a new model (on the test server), and
 edit that.
 
+Temporary files come from `mktemp` or live in the home directory, never a fixed
+path under `/tmp`: the machine is shared, and a stale file of the same name was
+once sent to the dev server under the wrong curator's name. Stop at the first
+failed step, and before any request that changes a model, print it and check
+the model id.
+
 ## Folders and files:
 
 - README.md -- for users

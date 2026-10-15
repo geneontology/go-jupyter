@@ -126,6 +126,31 @@ cloud-init (never committed, never in the repo's history):
   terminals and any `claude` session inside them (files on disk are safe). The
   runtime helpers `go-jupyter-add-user` and `go-jupyter-remove-user` both end in
   a restart, so run them between sessions, not during one.
+- **Each user's server is a transient systemd unit with a private `/tmp`
+  (since #95, October 2026).** `jupyterhub-systemdspawner` with `isolate_tmp`
+  starts every server as `jupyter-<user>-singleuser` under `PrivateTmp`, after
+  a request file one curator's session had left at `/tmp/req.json` was read and
+  posted to noctua-dev by another curator's session. What follows from it:
+  - A session's `/tmp` and `/var/tmp` are its own and are emptied when the
+    server stops (a hub restart, or the stop button on the hub's control
+    panel; logging out does not stop a server); the template `CLAUDE.md`
+    tells Claude to keep anything that matters under the home. The host's
+    `/tmp` keeps the old leftovers; sessions cannot see them, and nothing
+    deletes them.
+  - A user's server log is `journalctl -u jupyter-<user>-singleuser`, no longer
+    the hub's journal; `systemctl list-units 'jupyter-*'` lists who is up.
+  - The units run with `NoNewPrivileges`, so nothing setuid works inside a
+    session (`sudo`, `su`, `passwd`); no curator has sudo anyway.
+  - The hub still stops every unit as it shuts down (`cleanup_servers`), so a
+    restart ends everything as before. A hub that is killed rather than
+    stopped leaves the units running: `systemctl stop 'jupyter-*-singleuser'`.
+  - Verify after the deploying restart, once someone has spawned:
+    `systemctl show jupyter-<user>-singleuser -p PrivateTmp` prints `yes`, and
+    `ls /tmp/systemd-private-*-jupyter-<user>-singleuser-*/tmp` (as root) is
+    that session's private directory.
+  - Deploying it needs nothing by hand: `sudo go-jupyter-update` runs `uv sync`
+    (which installs the spawner package from `uv.lock`) and restarts the hub.
+    Pick an idle window (next bullet) and merge the `news/` entry with it.
 - **Idle is not the same as absent.** Curators leave JupyterLab tabs and
   `claude` processes running for days. To know whether anyone is *working*,
   read the timestamp of the last `user`/`assistant` entry in each
@@ -141,9 +166,11 @@ cloud-init (never committed, never in the repo's history):
   1. Full `go-jupyter-migrate` while the old hub is still up. Re-running it
      later is safe: it skips accounts that already exist and adds any created
      on the old box since.
-  2. In a quiet window, `systemctl stop jupyterhub` on the old box. With the
-     default spawner every single-user server and `claude` process is a child
-     of the hub, so this ends them all and nothing can change there afterwards.
+  2. In a quiet window, `systemctl stop jupyterhub` on the old box. The hub
+     stops every `jupyter-<user>-singleuser` unit as it shuts down, and each
+     `claude` process runs inside its unit, so this ends them all and nothing
+     can change there afterwards; `systemctl list-units 'jupyter-*'` must come
+     back empty before the next step.
   3. `go-jupyter-migrate <old-host>` again for the final delta, then
      `go-jupyter-refresh-user --all` on the new box: the rsync brings the old
      box's copies of the template-owned files (skills, `CLAUDE.md`, `.bashrc`)

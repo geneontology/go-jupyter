@@ -15,4 +15,5 @@ dependencies = [
     # oauthenticator provides the GitHub OAuth half of the production
     # MultiAuthenticator (requires a registered GitHub OAuth App).
     "oauthenticator>=17.0",
+    "jupyterhub-systemdspawner>=1.0",
 ]

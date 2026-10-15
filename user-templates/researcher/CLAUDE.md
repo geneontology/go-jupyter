@@ -115,6 +115,23 @@ MCPs available:
   entirely** — so report what you did (and the model URL) to a file in the
   user's home directory, and see "Where the user's work lives" below.
 
+## The box is shared: temporary files and requests
+
+Every curator has an account on this one machine. Your server has its own
+`/tmp`, emptied when the server stops, but the rules below hold anywhere:
+
+- **Temporary files come from `mktemp` (`mktemp -d` for a directory) or live
+  under the user's home.** Never a fixed path such as `/tmp/req.json`: on
+  2026-10-14 such a path held another curator's leftover request, the write
+  failed, and the stale file was sent to noctua-dev under this user's name.
+- **Stop at the first failed step.** `set -euo pipefail` in scripts; `&&`
+  between writing a file and the command that reads it.
+- **Before any request that changes a model, print the payload and check every
+  model id in it** is the model the user is working on. Prefer the `barista`
+  commands, which take the model id as an argument, over hand-built batch
+  requests; when a batch is unavoidable, pass the JSON inline
+  (`--data-urlencode 'requests=[...]'`), not from a file path.
+
 ## Where the user's work lives
 
 Four places, and only one of them is a real save. Know which is which, and be

@@ -1,73 +1,86 @@
 #!/usr/bin/env bash
 #
-# go-jupyter-link-skills — give one user a checkout of each skill source and link
-# its skills into ~/.claude/skills.
+# go-jupyter-link-skills — link the canonical skills into one user's ~/.claude/skills.
 #
-# The model (kltm, 2026-09-28): skills live in their own repositories
-# (geneontology/go-skills first); go-jupyter is only the box. Each user's home
-# holds a real git clone of every source listed in /opt/go-jupyter/skill-sources.txt
-# (~/<repo name>), owned by the user, and ~/.claude/skills/<skill> is a relative
-# symlink into that clone. Claude Code follows the link and watches the target,
-# so an edit in the clone is live in the session.
+# The model (kltm, 2026-10-14; go-jupyter#87): the skill repositories listed in
+# /opt/go-jupyter/skill-sources.txt (geneontology/go-skills first) are checked out
+# ONCE on the box, root-owned, under /var/lib/go-jupyter/skill-sources/<name> ("the
+# store"). Every user's ~/.claude/skills/<skill> is a symlink into the store.
+# Nobody edits the store: a skill changes by a pull request to its repository, and
+# the merge reaches every home at the next run. Until 2026-10-14 each home had its
+# own editable clone; a stray file could silently freeze it, and six of 36 homes
+# were running weeks-old skills.
 #
-#   * FAST-FORWARD ONLY WHEN CLEAN. A clone that is on <ref> with no local changes
-#     is fetched and fast-forwarded. A clone on another branch, or with local
-#     changes, is left exactly as it is (and logged): that is a curator editing a
-#     skill, and their work is the raw material for the future "dreaming" process
-#     that turns local skill edits into go-skills PRs.
-#   * A REAL DIRECTORY IS REPLACED ONLY WHEN IT IS AN UNMODIFIED TEMPLATE COPY.
-#     If ~/.claude/skills/<skill> is a directory rather than a link, it is compared
-#     with the go-jupyter template's copy of the same skill
-#     (user-templates/<tmpl>/.claude/skills/<skill>, <tmpl> from ~/.seeded). Byte-
-#     identical: it is moved to ~/.go-jupyter/refresh-backups/<ts>/ and the link
-#     takes its place (that is how a skill moves out of the template: land it in
-#     go-skills, let this run, THEN delete the template copy). Anything else (a
-#     copy the curator changed, a skill they authored, no template copy to compare
-#     with) is left as it is and logged. Nothing here deletes a directory.
-#   * LINK HYGIENE. A link that points into one of our clones but whose target no
-#     longer exists (skill removed upstream) is removed. Links elsewhere are not
-#     touched. Two sources offering the same skill name: the source listed first
-#     in skill-sources.txt wins, the other is logged and not linked.
+#   * UPSTREAM WINS THE NAME. If ~/.claude/skills/<skill> is anything but the link
+#     (a real directory, a file, a link elsewhere) and <skill> is a canonical name,
+#     it is moved to ~/.go-jupyter/skill-overrides/<ts>/<skill> and the link takes
+#     its place. Nothing is deleted: the move is logged, described in a README next
+#     to the moved copy, and a marker makes the login banner say so once.
+#   * PERSONAL SKILLS ARE LEFT ALONE. A real directory whose name is not canonical
+#     is the curator's own skill (kltm, 2026-10-14: experimentation is wanted, and
+#     the way to share it is a pull request to go-skills). This script never
+#     touches it; the login banner lists such skills and points at that flow.
+#   * WORKSPACE SOURCES. A source marked `workspace` (go-ontology) also keeps a
+#     per-user clone at ~/<name>: the curator's editing surface for the repository
+#     itself (ontology files, branches, pull requests). Its skills are still linked
+#     from the store. With --fetch the clone is fast-forwarded when it is on <ref>
+#     with no modified tracked files (untracked files do not block; one in the way
+#     makes git refuse, which is logged); otherwise it is left alone.
+#   * RETIRED CLONES. A per-user clone of a non-workspace source (~/go-skills from
+#     the previous model) is moved to ~/.go-jupyter/retired/<name>-<ts> when it is
+#     on <ref>, has no modified tracked files and nothing unpushed; otherwise it is
+#     left in place and logged for the operator. Nothing is deleted.
+#   * LINK HYGIENE. A link into the store, or into the old per-home clone layout,
+#     whose skill is no longer provided (removed or excluded upstream) is removed.
+#     Any other link is foreign and left alone unless it carries a canonical name.
 #   * SOURCE OPTIONS (skill-sources.txt, after <url> <ref> <subdir>):
-#       sparse=<dir>[,<dir>...]  blobless partial clone (--filter=blob:none) with
-#                                a cone sparse checkout of these directories plus
-#                                <subdir>; root-level files come along. For big
-#                                repositories such as go-ontology (208 MB this
-#                                way, 2026-09-29, against gigabytes in full).
-#       exclude=<skill>[,...]    skills of this source not to link (e.g. ones
-#                                that need tools the box does not have).
+#       sparse=<dir>[,<dir>...]  blobless partial clone with a cone sparse checkout
+#                                of these directories plus <subdir>; root-level
+#                                files come along (store and workspace clone alike)
+#       exclude=<skill>[,...]    skills of this source not to link
+#       workspace                keep a per-user clone too (see above)
+#     Two sources offering one skill name: the source listed first wins; the other
+#     is logged and not linked.
 #   * Respects ~/.go-jupyter/hold-skills (skips the user).
 #
-# Usage: go-jupyter-link-skills <user> [--no-fetch] [--sources FILE] [--dry-run]
-#                                      [--template-skills DIR]
-#        go-jupyter-link-skills --home DIR [...]     (non-root testing only)
-#   --template-skills DIR  the template skills directory to compare real
-#                          directories with (default: derived from ~/.seeded;
-#                          none in --home mode unless given)
+# Usage: go-jupyter-link-skills <user> [--fetch] [--sources FILE] [--store DIR] [--dry-run]
+#        go-jupyter-link-skills --update-store [--sources FILE] [--store DIR] [--dry-run]
+#        go-jupyter-link-skills --home DIR --store DIR [...]      (non-root testing only)
+#
+#   <user>          link one user. A missing store checkout is created, but an
+#                   existing one is not fetched: --update-store is the fetch.
+#   --fetch         also fetch and fast-forward the user's workspace clones.
+#   --update-store  clone or fast-forward every source in the store. Run once per
+#                   tick by go-jupyter-sync-skills when a source's ref moved, and
+#                   at first boot. Can be combined with <user>.
 #
 # Callers: go-jupyter-sync-skills (timer), go-jupyter-refresh-user, and the hub's
 # first-login seed (jupyterhub_config.py). Exit 0 unless the arguments are wrong.
 #
 set -euo pipefail
+umask 022
 
 SOURCES=/opt/go-jupyter/skill-sources.txt
-TEMPLATE_ROOT=/opt/go-jupyter/user-templates
-TEMPLATE_SKILLS=""
-FETCH=1
+STORE=/var/lib/go-jupyter/skill-sources
+FETCH=0
 DRY=0
+UPDATE_STORE=0
 USER_NAME=""
 HOME_OVERRIDE=""
 TS="$(date +%Y-%m-%dT%H%M%S)"
 while [ $# -gt 0 ]; do
     case "$1" in
-        --no-fetch) FETCH=0 ;;
-        --dry-run)  DRY=1 ;;
-        --sources)  SOURCES="${2:-}"; shift ;;
-        --home)     HOME_OVERRIDE="${2:-}"; shift ;;
-        --template-skills) TEMPLATE_SKILLS="${2:-}"; shift ;;
-        -h|--help)  sed -n '2,48p' "$0"; exit 0 ;;
-        -*)         echo "unknown option: $1" >&2; exit 2 ;;
-        *)          USER_NAME="$1" ;;
+        --fetch)        FETCH=1 ;;
+        --no-fetch)     FETCH=0 ;;             # accepted for older callers
+        --dry-run)      DRY=1 ;;
+        --update-store) UPDATE_STORE=1 ;;
+        --sources)      SOURCES="${2:-}"; shift ;;
+        --store)        STORE="${2:-}"; shift ;;
+        --home)         HOME_OVERRIDE="${2:-}"; shift ;;
+        --template-skills) shift ;;            # accepted for older callers; unused
+        -h|--help)      sed -n '2,60p' "$0"; exit 0 ;;
+        -*)             echo "unknown option: $1" >&2; exit 2 ;;
+        *)              USER_NAME="$1" ;;
     esac
     shift
 done
@@ -77,141 +90,241 @@ run() { if [ "$DRY" -eq 1 ]; then echo "  would: $*"; else "$@"; fi; }
 
 if [ -n "$HOME_OVERRIDE" ]; then
     [ "$(id -u)" -ne 0 ] || { echo "--home is for non-root testing only" >&2; exit 2; }
+    [ "$STORE" != /var/lib/go-jupyter/skill-sources ] || { echo "--home needs --store DIR" >&2; exit 2; }
     home="$HOME_OVERRIDE"; USER_NAME="$(id -un)"
     as_user() { "$@"; }
     own() { :; }
 else
     [ "$(id -u)" -eq 0 ] || { echo "must run as root (try: sudo $0 $*)" >&2; exit 2; }
-    [ -n "$USER_NAME" ] || { echo "usage: $0 <user> [--no-fetch] [--sources FILE] [--dry-run]" >&2; exit 2; }
-    home="$(getent passwd "$USER_NAME" | cut -d: -f6)"
-    [ -n "$home" ] && [ -d "$home" ] || { echo "no home directory for $USER_NAME" >&2; exit 2; }
+    if [ -n "$USER_NAME" ]; then
+        home="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+        [ -n "$home" ] && [ -d "$home" ] || { echo "no home directory for $USER_NAME" >&2; exit 2; }
+    elif [ "$UPDATE_STORE" -eq 0 ]; then
+        echo "usage: $0 <user> [--fetch] [--sources FILE] [--store DIR] [--dry-run] | --update-store" >&2; exit 2
+    fi
     as_user() { runuser -u "$USER_NAME" -- env HOME="$home" "$@"; }
     own() { chown -h "$USER_NAME:$USER_NAME" "$@"; }
 fi
 
 [ -f "$SOURCES" ] || { log "no sources file at $SOURCES; nothing to do"; exit 0; }
-if [ -e "$home/.go-jupyter/hold-skills" ]; then log "hold $USER_NAME (hold-skills present)"; exit 0; fi
-if [ -z "$TEMPLATE_SKILLS" ] && [ -z "$HOME_OVERRIDE" ]; then
-    tmpl="$(head -n1 "$home/.seeded" 2>/dev/null | tr -d '[:space:]')"
-    [ -n "$tmpl" ] || tmpl=researcher
-    TEMPLATE_SKILLS="$TEMPLATE_ROOT/$tmpl/.claude/skills"
-fi
 
-skills_dir="$home/.claude/skills"
-run mkdir -p "$skills_dir"
-# Every source's clone name, known before the loop: a link that points into a
-# LATER source must still be recognised as ours (so an earlier source can take
-# the name over: first listed wins) and not mistaken for a foreign link.
-declare -A clone_dirs=()
-while read -r url _; do
-    case "$url" in ''|'#'*) continue ;; esac
-    clone_dirs["$(basename "$url" .git)"]=1
-done < "$SOURCES"
-declare -A seen_sources=()
-
+# ---- sources ---------------------------------------------------------------
+src_url=(); src_ref=(); src_sub=(); src_name=(); src_sparse=(); src_exclude=(); src_ws=()
+declare -A clone_names=()      # every source's clone name (old per-home layout and workspaces)
 while read -r url ref subdir rest; do
     case "$url" in ''|'#'*) continue ;; esac
     name="$(basename "$url" .git)"
-    clone="$home/$name"
-    seen_sources["$name"]=1
-    sparse=""; exclude=""
+    sparse=""; exclude=""; ws=0
     for kv in $rest; do
         case "$kv" in
             sparse=*)  sparse="${kv#sparse=}" ;;
             exclude=*) exclude="${kv#exclude=}" ;;
+            workspace) ws=1 ;;
             '#'*)      break ;;
-            *)         log "$USER_NAME: unknown option '$kv' for $url; ignored" ;;
+            *)         log "unknown option '$kv' for $url; ignored" ;;
         esac
     done
+    src_url+=("$url"); src_ref+=("$ref"); src_sub+=("$subdir"); src_name+=("$name")
+    src_sparse+=("$sparse"); src_exclude+=("$exclude"); src_ws+=("$ws")
+    clone_names["$name"]=1
+done < "$SOURCES"
+[ "${#src_url[@]}" -gt 0 ] || { log "no sources listed in $SOURCES; nothing to do"; exit 0; }
 
-    if [ ! -d "$clone/.git" ]; then
-        if [ -e "$clone" ]; then log "$USER_NAME: $clone exists and is not a git checkout; skipping source $url"; continue; fi
-        if [ -n "$sparse" ]; then
-            # shellcheck disable=SC2086
-            dirs="$(printf '%s' "$subdir,$sparse" | tr ',' ' ')"
-            log "$USER_NAME: cloning $url ($ref) into $clone (blobless, sparse: $dirs)"
-            if [ "$DRY" -eq 1 ]; then echo "  would: git clone --filter=blob:none --no-checkout --branch $ref $url $clone; sparse-checkout set --cone $dirs; checkout $ref"; continue; fi
-            # shellcheck disable=SC2086
-            if ! { as_user git clone -q --filter=blob:none --no-checkout --branch "$ref" "$url" "$clone" \
-                   && as_user git -C "$clone" sparse-checkout set --cone $dirs \
-                   && as_user git -C "$clone" checkout -q "$ref"; } 2>/dev/null; then
-                log "$USER_NAME: sparse clone of $url failed; removing the partial clone, will retry next run"
-                as_user rm -rf -- "$clone"; continue
-            fi
-        else
-            log "$USER_NAME: cloning $url ($ref) into $clone"
-            if [ "$DRY" -eq 1 ]; then echo "  would: git clone --branch $ref $url $clone"; continue; fi
-            if ! as_user git clone -q --branch "$ref" "$url" "$clone" 2>/dev/null; then
-                log "$USER_NAME: clone of $url failed; will retry next run"; continue
-            fi
+# ---- the store -------------------------------------------------------------
+# clone_into DIR URL REF SUBDIR SPARSE [as_user]  — a fresh clone, sparse when asked.
+clone_into() {
+    local dir="$1" url="$2" ref="$3" subdir="$4" sparse="$5" who="${6:-}" dirs
+    if [ -n "$sparse" ]; then
+        dirs="$(printf '%s' "$subdir,$sparse" | tr ',' ' ')"
+        if [ "$DRY" -eq 1 ]; then echo "  would: git clone --filter=blob:none --no-checkout --branch $ref $url $dir; sparse-checkout set --cone $dirs; checkout $ref"; return 0; fi
+        # shellcheck disable=SC2086
+        if ! { $who git clone -q --filter=blob:none --no-checkout --branch "$ref" "$url" "$dir" \
+               && $who git -C "$dir" sparse-checkout set --cone $dirs \
+               && $who git -C "$dir" checkout -q "$ref"; } 2>/dev/null; then
+            $who rm -rf -- "$dir"; return 1
         fi
-    elif [ "$FETCH" -eq 1 ]; then
-        branch="$(as_user git -C "$clone" symbolic-ref --short -q HEAD 2>/dev/null || echo DETACHED)"
-        dirty="$(as_user git -C "$clone" status --porcelain 2>/dev/null | head -1)"
-        if [ "$branch" = "$ref" ] && [ -z "$dirty" ]; then
-            if [ "$DRY" -eq 1 ]; then echo "  would: fast-forward $clone to origin/$ref"; else
-                as_user git -C "$clone" fetch -q origin "$ref" 2>/dev/null \
-                    && as_user git -C "$clone" merge -q --ff-only FETCH_HEAD 2>/dev/null \
-                    || log "$USER_NAME: could not fast-forward $clone; left as is"
-            fi
-        else
-            log "$USER_NAME: $clone left alone (branch=$branch${dirty:+, local changes}) — curator edit in progress"
+    else
+        if [ "$DRY" -eq 1 ]; then echo "  would: git clone --branch $ref $url $dir"; return 0; fi
+        if ! $who git clone -q --branch "$ref" "$url" "$dir" 2>/dev/null; then
+            $who rm -rf -- "$dir"; return 1
         fi
     fi
+}
 
-    src="$clone/$subdir"
-    [ -d "$src" ] || { log "$USER_NAME: $src missing in $name; no skills linked from it"; continue; }
-    for d in "$src"/*/; do
-        [ -f "$d/SKILL.md" ] || continue
-        skill="$(basename "$d")"
-        dst="$skills_dir/$skill"
-        rel="../../$name/$subdir/$skill"
-        case ",$exclude," in *",$skill,"*)
-            if [ -L "$dst" ] && [ "$(readlink "$dst")" = "$rel" ]; then
-                log "$USER_NAME: $skill is now excluded for $name; removing its link"; run rm -f "$dst"
-            fi
-            continue ;;
-        esac
-        if [ -L "$dst" ]; then
-            cur="$(readlink "$dst")"
-            if [ "$cur" != "$rel" ]; then
-                curfirst="${cur#../../}"; curfirst="${curfirst%%/*}"
-                if [ "$curfirst" = "$name" ] || { [ -n "${clone_dirs[$curfirst]:-}" ] && [ ! -e "$dst" ]; }; then
-                    # ours and stale, or ours and dangling (its provider dropped the skill): retarget
-                    run ln -sfn "$rel" "$dst"; own "$dst"; log "$USER_NAME: relinked $skill -> $rel"
-                elif [ -n "${seen_sources[$curfirst]:-}" ]; then
-                    log "$USER_NAME: $skill is already provided by $curfirst (listed first); $name's copy not linked"
-                elif [ -n "${clone_dirs[$curfirst]:-}" ]; then
-                    # points into a source listed AFTER this one: this one wins
-                    run ln -sfn "$rel" "$dst"; own "$dst"; log "$USER_NAME: $skill now from $name (listed before $curfirst)"
-                else
-                    log "$USER_NAME: $skill links elsewhere ($cur); left alone"
+store_ok() { [ -d "$1/.git" ] && git -C "$1" rev-parse -q --verify HEAD >/dev/null 2>&1; }
+
+# ensure_store [update]: every source present in the store; with "update", fetched
+# and fast-forwarded too. The store is ours and nobody edits it, so a fast-forward
+# that fails (history rewritten upstream) becomes a hard reset, logged.
+ensure_store() {
+    local update="${1:-}" i dir
+    [ -d "$STORE" ] || run mkdir -p "$STORE"
+    for i in "${!src_url[@]}"; do
+        dir="$STORE/${src_name[$i]}"
+        if ! store_ok "$dir"; then
+            if [ -e "$dir" ]; then log "store: $dir is not a usable checkout (interrupted clone?); replacing it"; run rm -rf -- "$dir"; fi
+            log "store: cloning ${src_url[$i]} (${src_ref[$i]}) into $dir${src_sparse[$i]:+ (blobless, sparse: ${src_sub[$i]},${src_sparse[$i]})}"
+            clone_into "$dir" "${src_url[$i]}" "${src_ref[$i]}" "${src_sub[$i]}" "${src_sparse[$i]}" \
+                || log "store: clone of ${src_url[$i]} failed; its skills are not linked until the next run"
+        elif [ -n "$update" ]; then
+            if [ "$DRY" -eq 1 ]; then echo "  would: fast-forward $dir to origin/${src_ref[$i]}"; continue; fi
+            if git -C "$dir" fetch -q origin "${src_ref[$i]}" 2>/dev/null; then
+                if ! git -C "$dir" merge -q --ff-only FETCH_HEAD 2>/dev/null; then
+                    log "store: $dir cannot fast-forward (history rewritten upstream?); resetting to origin/${src_ref[$i]}"
+                    git -C "$dir" reset -q --hard FETCH_HEAD
                 fi
+            else
+                log "store: fetch of ${src_url[$i]} failed; keeping $(git -C "$dir" rev-parse --short HEAD)"
             fi
-        elif [ -d "$dst" ] && [ -n "$TEMPLATE_SKILLS" ] && [ -d "$TEMPLATE_SKILLS/$skill" ] \
-             && diff -rq "$TEMPLATE_SKILLS/$skill" "$dst" >/dev/null 2>&1; then
-            # Unmodified copy of the template: nothing is lost by replacing it, and
-            # the copy is kept anyway (same place refresh-user keeps what it supersedes).
-            bk="$home/.go-jupyter/refresh-backups/$TS/.claude/skills"
-            log "$USER_NAME: $skill is an unmodified template copy; kept under $bk, replaced by the $name link"
-            run as_user mkdir -p "$bk"
-            run as_user mv "$dst" "$bk/$skill"
-            run ln -s "$rel" "$dst"; own "$dst"
-        elif [ -e "$dst" ]; then
-            log "$USER_NAME: $skill is a real directory in ~/.claude/skills (not an unmodified template copy); not replaced by the $name link"
-        else
-            run ln -s "$rel" "$dst"; own "$dst"; log "$USER_NAME: linked $skill -> $rel"
         fi
     done
-done < "$SOURCES"
+}
 
-# Remove links into our clones whose target vanished (skill removed upstream).
+if [ "$UPDATE_STORE" -eq 1 ]; then ensure_store update; else ensure_store; fi
+[ -n "$USER_NAME" ] || exit 0
+
+# ---- one user ----------------------------------------------------------------
+if [ -e "$home/.go-jupyter/hold-skills" ]; then log "hold $USER_NAME (hold-skills present)"; exit 0; fi
+
+skills_dir="$home/.claude/skills"
+if [ ! -d "$skills_dir" ]; then run mkdir -p "$skills_dir"; own "$skills_dir"; fi
+
+# What every home should have: skill -> store path. First listed source wins a name.
+declare -A want=()
+declare -A provider=()
+for i in "${!src_url[@]}"; do
+    sdir="$STORE/${src_name[$i]}/${src_sub[$i]}"
+    [ -d "$sdir" ] || { log "$USER_NAME: $sdir missing in the store; no skills linked from ${src_name[$i]}"; continue; }
+    for d in "$sdir"/*/; do
+        [ -f "$d/SKILL.md" ] || continue
+        skill="$(basename "$d")"
+        case ",${src_exclude[$i]}," in *",$skill,"*) continue ;; esac
+        if [ -n "${want[$skill]:-}" ]; then
+            log "$USER_NAME: $skill is already provided by ${provider[$skill]} (listed first); ${src_name[$i]}'s copy not linked"
+            continue
+        fi
+        want["$skill"]="$sdir/$skill"; provider["$skill"]="${src_name[$i]}"
+    done
+done
+
+# A link is ours when it points into the store or into the old per-home layout
+# (../../<clone name>/...), which this script used to create.
+ours_link() {
+    local t="$1" first
+    case "$t" in
+        "$STORE"/*) return 0 ;;
+        ../../*) first="${t#../../}"; first="${first%%/*}"; [ -n "${clone_names[$first]:-}" ] ;;
+        *) return 1 ;;
+    esac
+}
+
+overrides="$home/.go-jupyter/skill-overrides/$TS"
+set_aside_n=0
+set_aside() {   # set_aside <skill> <what it was>
+    local skill="$1" was="$2"
+    if [ "$set_aside_n" -eq 0 ]; then
+        run as_user mkdir -p "$overrides"
+        if [ "$DRY" -eq 0 ]; then
+            as_user tee "$overrides/README.md" >/dev/null <<README
+# Skills set aside by the hub, $TS
+
+A canonical skill from the shared skill repositories now takes these names in
+~/.claude/skills (geneontology/go-skills, or go-ontology for ontology skills).
+Your copies are here, unchanged. To propose your change for everyone, ask Claude
+to open an issue, or a pull request from a fork, against that repository.
+
+README
+        fi
+    fi
+    set_aside_n=$((set_aside_n + 1))
+    run as_user mv -- "$skills_dir/$skill" "$overrides/$skill"
+    [ "$DRY" -eq 1 ] || printf -- '- `%s`: was %s; now links to %s\n' "$skill" "$was" "${want[$skill]}" | as_user tee -a "$overrides/README.md" >/dev/null
+    log "$USER_NAME: $skill was $was; kept under $overrides, replaced by the ${provider[$skill]} link"
+}
+
+for skill in $(printf '%s\n' "${!want[@]}" | sort); do
+    dst="$skills_dir/$skill"; tgt="${want[$skill]}"
+    if [ -L "$dst" ]; then
+        cur="$(readlink "$dst")"
+        [ "$cur" = "$tgt" ] && continue
+        if ours_link "$cur"; then
+            run ln -sfn "$tgt" "$dst"; own "$dst"; log "$USER_NAME: relinked $skill -> $tgt"
+        else
+            set_aside "$skill" "a link to $cur"; run ln -s "$tgt" "$dst"; own "$dst"
+        fi
+    elif [ -d "$dst" ]; then
+        set_aside "$skill" "a directory"; run ln -s "$tgt" "$dst"; own "$dst"
+    elif [ -e "$dst" ]; then
+        set_aside "$skill" "a file"; run ln -s "$tgt" "$dst"; own "$dst"
+    else
+        run ln -s "$tgt" "$dst"; own "$dst"; log "$USER_NAME: linked $skill -> $tgt"
+    fi
+done
+if [ "$set_aside_n" -gt 0 ] && [ "$DRY" -eq 0 ]; then
+    as_user touch "$home/.go-jupyter/skill-overrides/.unseen"
+fi
+
+# Links of ours whose skill is no longer provided (removed or excluded upstream).
 for l in "$skills_dir"/*; do
     [ -L "$l" ] || continue
+    skill="$(basename "$l")"
+    [ -n "${want[$skill]:-}" ] && continue
     t="$(readlink "$l")"
-    first="${t#../../}"; first="${first%%/*}"
-    if [ -n "${clone_dirs[$first]:-}" ] && [ ! -e "$l" ]; then
-        log "$USER_NAME: removing dangling link $(basename "$l") -> $t"; run rm -f "$l"
+    if ours_link "$t"; then log "$USER_NAME: removing link $skill -> $t (no longer provided)"; run rm -f -- "$l"; fi
+done
+
+# Personal skills: logged, never touched. The login banner lists them for the user.
+for d in "$skills_dir"/*/; do
+    [ -d "$d" ] && [ ! -L "${d%/}" ] && [ -f "$d/SKILL.md" ] || continue
+    skill="$(basename "$d")"
+    [ -n "${want[$skill]:-}" ] || log "$USER_NAME: personal skill $skill (not in any source); left alone"
+done
+
+# Workspace clones (kept, the curator's editing surface) and retired clones.
+for i in "${!src_url[@]}"; do
+    name="${src_name[$i]}"; ref="${src_ref[$i]}"; clone="$home/$name"
+    if [ "${src_ws[$i]}" -eq 1 ]; then
+        if [ ! -d "$clone/.git" ]; then
+            if [ -e "$clone" ]; then log "$USER_NAME: $clone exists and is not a git checkout; no workspace clone made"; continue; fi
+            log "$USER_NAME: cloning ${src_url[$i]} ($ref) into $clone (workspace${src_sparse[$i]:+; blobless, sparse: ${src_sub[$i]},${src_sparse[$i]}})"
+            clone_into "$clone" "${src_url[$i]}" "$ref" "${src_sub[$i]}" "${src_sparse[$i]}" as_user \
+                || log "$USER_NAME: clone of ${src_url[$i]} failed; will retry next run"
+        elif [ "$FETCH" -eq 1 ]; then
+            branch="$(as_user git -C "$clone" symbolic-ref --short -q HEAD 2>/dev/null || echo DETACHED)"
+            modified="$(as_user git -C "$clone" status --porcelain --untracked-files=no 2>/dev/null | head -1)"
+            if [ "$branch" = "$ref" ] && [ -z "$modified" ]; then
+                if [ "$DRY" -eq 1 ]; then echo "  would: fast-forward $clone to origin/$ref"; else
+                    as_user git -C "$clone" fetch -q origin "$ref" 2>/dev/null \
+                        && as_user git -C "$clone" merge -q --ff-only FETCH_HEAD 2>/dev/null \
+                        || log "$USER_NAME: could not fast-forward $clone (local commits, or an untracked file in the way); left as is"
+                fi
+            else
+                log "$USER_NAME: $clone left alone (branch=$branch${modified:+, modified files}) — curator work in progress"
+            fi
+        fi
+    elif [ -d "$clone/.git" ]; then
+        branch="$(as_user git -C "$clone" symbolic-ref --short -q HEAD 2>/dev/null || echo DETACHED)"
+        modified="$(as_user git -C "$clone" status --porcelain --untracked-files=no 2>/dev/null | head -1)"
+        unpushed="$(as_user git -C "$clone" rev-list --count '@{u}..HEAD' 2>/dev/null || echo '?')"
+        if [ "$branch" = "$ref" ] && [ -z "$modified" ] && [ "$unpushed" = "0" ]; then
+            retired="$home/.go-jupyter/retired"
+            run as_user mkdir -p "$retired"
+            if [ "$DRY" -eq 0 ] && [ ! -f "$retired/README.md" ]; then
+                as_user tee "$retired/README.md" >/dev/null <<README
+# Retired by the hub
+
+Skills now come from one read-only checkout kept by the hub; a per-home clone
+is no longer used for them. Clones that were untouched (on their main branch,
+nothing modified, nothing unpushed) were moved here unchanged, with any files
+you had left inside them. To change a skill, ask Claude to open an issue or a
+pull request against its repository (geneontology/go-skills).
+README
+            fi
+            run as_user mv -- "$clone" "$retired/$name-$TS"
+            log "$USER_NAME: retired $clone -> $retired/$name-$TS (untouched clone; its skills now link from the store)"
+        else
+            log "$USER_NAME: $clone left in place (branch=$branch${modified:+, modified files}${unpushed:+, unpushed=$unpushed}); skills no longer link into it; retire by hand"
+        fi
     fi
 done
 exit 0

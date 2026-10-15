@@ -575,9 +575,10 @@ if IS_ROOT:
             with open(marker, 'w') as _m:
                 _m.write(chosen_template + '\n')
             subprocess.run(['chown', '-R', f'{username}:{username}', home])
-            # Skill sources (skill-sources.txt): clone them into the new home and
-            # link their skills into ~/.claude/skills. Best effort: the timer
-            # (go-jupyter-sync-skills) repeats it, so a failure here only delays.
+            # Skill sources (skill-sources.txt): link the store's skills into
+            # ~/.claude/skills and clone any workspace source (go-ontology) into
+            # the new home. Best effort: the timer (go-jupyter-sync-skills)
+            # repeats it, so a failure here only delays.
             link = '/usr/local/sbin/go-jupyter-link-skills'
             if os.path.exists(link):
                 try:

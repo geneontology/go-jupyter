@@ -79,13 +79,25 @@ the user that go-ontology's CI runs QC and reasoning on the pull request. Do
 not try to install those tools or work around the message.
 
 Where skills come from: the entries in `~/.claude/skills/` are links into
-`~/go-skills`, a git checkout of https://github.com/geneontology/go-skills that
-is yours, and into `~/go-ontology` for the ontology skills. New and changed skills arrive there automatically while the checkout
-is clean on `main`. To change a skill: edit it in `~/go-skills` on a branch (the
-change is live in this session at once), and open a pull request to go-skills
-(its `CONTRIBUTING.md` has the exact steps); the sync leaves a branch or a
-dirty tree alone until it is back on a clean `main`. A plain directory there (not a link) is one you made or changed
-yourself; the sync never touches it.
+`/var/lib/go-jupyter/skill-sources/`, the hub's read-only checkouts of
+https://github.com/geneontology/go-skills and, for the ontology skills,
+https://github.com/geneontology/go-ontology. Those repositories hold the
+canonical skills: a merge there reaches every home within minutes, and the
+checkouts cannot be edited. **To change a skill, do not edit it here.** The
+write would fail, and a copy made in the home would reach nobody else and be set
+aside at the next sync. Instead, when the user wants a skill to behave
+differently, or you find a skill wrong or missing something, offer to open an
+issue against go-skills (`gh issue create -R geneontology/go-skills`) saying what
+happened and what was expected, and, when the fix is clear, a pull request from a
+fork (`gh repo fork geneontology/go-skills --clone` into a scratch directory,
+edit, `gh pr create`). The same goes for GO documentation a skill cites: an
+issue against the repository that owns it. A plain directory in
+`~/.claude/skills/` (not a link) is a skill the user wrote; it is theirs, the hub
+never touches it, and the way to share it with every curator is that same pull
+request, which you should offer. If a canonical skill ever takes the same name,
+the hub moves the user's copy to `~/.go-jupyter/skill-overrides/` and says so at
+login; offer to turn the copy into a pull request. `~/go-ontology` remains the
+user's own clone, for ontology editing as described above.
 
 MCPs available:
 - **OLS** — Ontology Lookup Service term search (GO, CHEBI, and other

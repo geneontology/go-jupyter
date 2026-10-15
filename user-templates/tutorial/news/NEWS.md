@@ -6,6 +6,29 @@ way.
 
 ---
 
+## 2026-10-14 — Skills are now read-only links to go-skills; your own skills stay yours
+
+The skills Claude uses (`~/.claude/skills/*`) now link into one checkout of
+geneontology/go-skills (and of go-ontology, for the ontology skills) that the
+hub keeps current and nobody can edit. A merge there reaches every home within
+minutes, every time. Until now each home had its own editable clone, and a stray
+file could silently stop it updating: six homes were running weeks-old skills.
+
+- To change a skill, ask Claude to open an issue against go-skills, or a pull
+  request from a fork. The linked files cannot be edited, and a copy edited in
+  your home reaches nobody else.
+- `~/go-skills` has left your home: moved to `~/.go-jupyter/retired/` if it was
+  untouched, left in place if you had work on a branch (ask Claude to turn that
+  into a pull request).
+- A skill you wrote yourself in `~/.claude/skills/` is untouched and still works.
+  Ask Claude to propose it to go-skills when you want every curator to have it.
+- If a copy of yours had the same name as a go-skills skill, the hub set it aside
+  under `~/.go-jupyter/skill-overrides/` and the canonical one took over; the
+  login banner says so.
+- `~/go-ontology` is unchanged: it is still your clone for ontology work.
+
+---
+
 ## 2026-10-12 — Who can sign in is now a GO permission
 
 Access to this hub is now recorded in GO's `users.yaml` (geneontology/go-site)

@@ -40,6 +40,33 @@ if [[ $- == *i* ]] && [ -t 0 ]; then
   fi
   unset _news _seen _top _last
 
+  # Skills the hub set aside: a canonical skill (go-skills, go-ontology) took the
+  # name of a copy in ~/.claude/skills; the copy is kept. Shown once per event.
+  if [ -e "$HOME/.go-jupyter/skill-overrides/.unseen" ]; then
+    echo "  ─── Skills set aside ───────────────────────"
+    echo "  A canonical skill now takes the place of a copy you had in ~/.claude/skills."
+    echo "  Your copy is kept under ~/.go-jupyter/skill-overrides/ (see its README)."
+    echo "  To get your change into the canonical skill, ask Claude to propose it to"
+    echo "  go-skills as an issue or a pull request."
+    echo ""
+    rm -f "$HOME/.go-jupyter/skill-overrides/.unseen" 2>/dev/null || true
+  fi
+  # Your own skills: real directories in ~/.claude/skills (not links into the
+  # hub's checkouts, not the template's own). Named so the way to share them is known.
+  _tmpl="$(head -n1 "$HOME/.seeded" 2>/dev/null | tr -d '[:space:]')"; [ -n "$_tmpl" ] || _tmpl=researcher
+  _personal=""
+  for _d in "$HOME"/.claude/skills/*/; do
+    [ -d "$_d" ] && [ ! -L "${_d%/}" ] && [ -f "$_d/SKILL.md" ] || continue
+    [ -d "/opt/go-jupyter/user-templates/$_tmpl/.claude/skills/$(basename "$_d")" ] && continue
+    _personal="$_personal $(basename "$_d")"
+  done
+  if [ -n "$_personal" ]; then
+    echo "  Your own skills (not in go-skills):$_personal"
+    echo "  To share one with every curator, ask Claude to propose it to go-skills."
+    echo ""
+  fi
+  unset _tmpl _personal _d
+
   echo ""
   read -r choice
   if [ "$choice" != "t" ] && [ "$choice" != "T" ]; then

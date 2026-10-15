@@ -160,46 +160,52 @@ cloud-init (never committed, never in the repo's history):
   copies whatever differs, so old copies would overwrite files written on the
   new box since. Copy per user, on request, if someone kept working on the old
   box through a still-open WebSocket.
-- **Where skills come from, and how changes reach curators (since 2026-09-28).**
-  Skills live in their own repositories, listed one per line in
-  `skill-sources.txt` (geneontology/go-skills first, geneontology/go-ontology
-  second). Every seeded account holds a real git clone of each source in its
-  home (`~/go-skills`, `~/go-ontology`), owned by the user, and
-  `~/.claude/skills/<skill>` is a relative symlink into that clone. A source
-  can be cloned blobless and sparse (`sparse=` option: go-ontology comes as its
-  skills plus `src/ontology`, about 210 MB instead of gigabytes) and can leave
-  skills out (`exclude=`: the two that need the ODK Docker image). Two sources
-  offering the same skill name: the first listed wins, the other is logged.
-  Everything for everyone: no per-template list. The timer
-  (`go-jupyter-sync-skills`) checks each source's ref with one `ls-remote` per
-  tick and, when it moved (or this repo's templates or sources file changed,
-  or a seeded home lacks a clone, or `--force`), runs `go-jupyter-link-skills`
-  for every user: a clone that is clean on its ref is fast-forwarded; one on a
-  branch or with local changes is left alone and logged, because that is a
-  curator editing a skill. Linking, collision handling and dangling-link
-  cleanup happen only on those runs, not on every tick; a skill directory a
-  curator creates on a branch is linked at the next run, or at once by hand
-  with `ln -s ../../go-skills/skills/NAME ~/.claude/skills/NAME`. `exclude=`
-  withholds the personal link only; inside the checkout the skill is still a
-  project skill. Claude Code follows the links and watches the targets, so an edit in
-  the clone is live in the session; a running session picks up new upstream
-  text on its next invoke of the skill. News still mirrors from the template
-  (`news/`) and shows at the next session start. The template `CLAUDE.md`,
-  `README.md`, `.bashrc` and `.mcp.json` still reach existing homes only via
-  `sudo go-jupyter-refresh-user --all` (dry-run first). Verify by looking at
-  the homes: `ls -l /home/*/.claude/skills` shows links into `~/go-skills`.
-  When a change touches both `go-jupyter-link-skills` and `skill-sources.txt`,
-  install the helper on the box before merging: the timer runs the installed
-  helper against the merged file within minutes.
+- **Where skills come from, and how changes reach curators (since 2026-10-14,
+  #87; per-home clones from 2026-09-28 to then).** Skills live in their own
+  repositories, listed one per line in `skill-sources.txt`
+  (geneontology/go-skills first, geneontology/go-ontology second). Each source
+  is checked out once on the box, root-owned, under
+  `/var/lib/go-jupyter/skill-sources/<repo>` (the store), and every seeded
+  account's `~/.claude/skills/<skill>` is a symlink into it. Nobody edits the
+  store: a skill changes by a pull request to its repository, and the merge is
+  in every home within minutes. A source can be checked out blobless and
+  sparse (`sparse=`: go-ontology comes as its skills plus `src/ontology`,
+  about 210 MB instead of gigabytes), can leave skills out (`exclude=`: the
+  two that need the ODK Docker image), and can be a `workspace` (go-ontology):
+  each home then also keeps a per-user clone for editing the repository
+  itself, with its skills still linked to the store. Two sources offering the
+  same skill name: the first listed wins, the other is logged. Everything for
+  everyone: no per-template list. The timer (`go-jupyter-sync-skills`) checks
+  each source's ref with one `ls-remote` per tick; when it moved (or this
+  repo's templates or sources file changed, or the store is incomplete, or
+  `--force`) it fetches the store (`go-jupyter-link-skills --update-store`)
+  and fast-forwards clean workspace clones. The per-home link pass
+  (`go-jupyter-link-skills <user>`) runs on every tick and never fetches:
+  links are made, retargeted and, for skills gone upstream, removed; a real
+  directory, file or foreign link under a canonical name is moved to
+  `~/.go-jupyter/skill-overrides/<timestamp>/` with a README and a one-time
+  notice at the next login; a real directory under any other name is the
+  curator's own skill and is never touched (experimentation is wanted; the
+  pull request to go-skills is the way to share it). `exclude=` withholds the
+  personal link only; inside a workspace clone the skill is still a project
+  skill. Claude Code follows the links and watches the targets, so a running
+  session picks up new upstream text on its next invoke of the skill. News
+  still mirrors from the template (`news/`) and shows at the next session
+  start. The template `CLAUDE.md`, `README.md`, `.bashrc` and `.mcp.json`
+  still reach existing homes only via `sudo go-jupyter-refresh-user --all`
+  (dry-run first). Verify by looking at the homes: `ls -l /home/*/.claude/skills`
+  shows links into `/var/lib/go-jupyter/skill-sources/`, and
+  `journalctl -t go-jupyter-link-skills` shows what was set aside or left in
+  place. When a change touches both `go-jupyter-link-skills` and
+  `skill-sources.txt`, install the helper on the box before merging: the timer
+  runs the installed helper against the merged file within minutes.
   Skills that a template still carries as real directories (only the tutorial's
   workshop-specific `exercise` and `recap`, kept out of go-skills by decision)
   are mirrored per skill directory, never with a whole-directory delete. When
-  go-skills starts serving a skill a template also carries, `link-skills`
-  replaces a home's copy with the link once the copy is byte-identical to the
-  template's (the copy is kept under `~/.go-jupyter/refresh-backups/`); a copy
-  the curator changed stays, and is logged. Delete the template copy from the
-  repo only after that has happened in every home. The seven GO-CAM skills went
-  through exactly this on 2026-09-28.
+  go-skills starts serving a skill a template also carries, the next link pass
+  sets each home's copy aside and links the canonical one; delete the template
+  copy from the repo afterwards. The seven GO-CAM skills left the templates
+  this way on 2026-09-28, under the earlier byte-identical rule.
 - **The drop-box save is a two-file export from noctua-dev (since 2026-09-24).**
   The contract itself lives in
   [`geneontology/go-cam-drop-box`](https://github.com/geneontology/go-cam-drop-box)
@@ -263,44 +269,55 @@ flowchart LR
     P[pull request]
     R[CI + CODEOWNERS review]
   end
-  subgraph H[a curator's home on the hub]
-    D[clone on main, links in ~/.claude/skills]
-    L[live in the session]
-    E[edited: branch or local changes]
-    N[personal: plain directory]
+  subgraph B[the box]
+    S[store: one root-owned checkout per source]
   end
-  U -- "helper run, minutes after a merge" --> D
-  D --> L
-  L -- "edit in the clone" --> E
-  E -- "existing skill: at once" --> L
-  E -- "new directory: next helper run, or ln -s" --> L
-  E -- "git push, gh pr create" --> P
+  subgraph H[a curator's home on the hub]
+    L[~/.claude/skills: links into the store]
+    N[personal: plain directory, the curator's own]
+    O[set aside: ~/.go-jupyter/skill-overrides]
+  end
+  U -- "timer, minutes after a merge" --> S
+  S -- "link pass, every tick" --> L
+  N -- "upstream adopts the name" --> O
+  N -- "fork, edit, gh pr create" --> P
+  L -- "issue or PR against go-skills" --> P
   P --> R
   R -- "merged" --> U
-  R -- "changes requested" --> E
-  E -- "git switch main, git pull" --> D
-  L -- "directory outside the clone" --> N
-  N -- "move into ~/go-skills" --> E
+  R -- "changes requested" --> P
 ```
 
 Facts the picture leaves out:
 
-- A helper run happens when any source's ref moves, when this repo's
-  templates or `skill-sources.txt` change, when a seeded home lacks a clone,
-  or on `go-jupyter-sync-skills --force`. A quiet timer tick does nothing, so
-  "next run" is not "within five minutes" unless something upstream moved.
+- The store is `/var/lib/go-jupyter/skill-sources/<repo>`. It is fetched when a
+  source's ref moves (one `ls-remote` per source per tick) or on
+  `go-jupyter-sync-skills --force`. The per-home link pass runs on every tick
+  and never fetches, so a link that was removed or replaced is back within
+  about five minutes.
+- Nobody can edit the store. A copy in `~/.claude/skills` under a canonical
+  name, whatever it is, is moved to `~/.go-jupyter/skill-overrides/<timestamp>/`
+  with a README and announced at the next login. Nothing is deleted.
+- A plain directory under a name no source provides is the curator's own skill.
+  The helpers never touch it; the login banner names it and points at the
+  pull-request path. Experimentation is wanted; the canonical set is go-skills
+  (kltm, 2026-10-14, #87).
+- go-ontology is a `workspace` source: each home keeps a clone of it for editing
+  the ontology (branches, pull requests to go-ontology). Its skills still link
+  to the store. The clone fast-forwards on a tick where its ref moved, when it
+  is on `master` with no modified tracked files; untracked files do not block.
+- The per-home `~/go-skills` clones of the previous model were retired on
+  2026-10-14: an untouched clone moved to `~/.go-jupyter/retired/`, one with
+  work on it was left in place and logged for the operator.
 - `~/.go-jupyter/hold-skills` in a home makes every run skip that account.
-- A skill deleted upstream leaves a clean clone at the next run and its link
-  is dropped; a curator on a branch keeps the directory and the link until
-  they return to `main`.
+- A skill deleted or excluded upstream loses its link at the next pass.
 - `exclude=` on a source withholds the personal link only; a session started
-  inside the checkout still sees the skill as a project skill.
-- Any repository a curator clones that has `.claude/skills/` provides those
-  skills to sessions started inside it. That is the only way a repository not
-  listed in `skill-sources.txt` reaches a session, and it reaches one curator.
-- The return half of the loop is manual today: the curator pushes and opens
-  the pull request. Automating it (#72), a feedback command (#25) and usage
-  observation (#36) are open.
+  inside a workspace clone still sees the skill as a project skill. Likewise any
+  repository a curator clones that has `.claude/skills/` provides those skills
+  to sessions started inside it, and to that curator only.
+- The return half of the loop is the curator's, with the agent's help: an
+  issue against go-skills, or a pull request from a fork. Proposals derived
+  from traces (#72), the feedback command (#25) and usage observation (#36)
+  are open.
 
 ## Repo layout
 

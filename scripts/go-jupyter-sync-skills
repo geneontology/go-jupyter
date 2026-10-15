@@ -5,12 +5,15 @@
 # Runs as root on a systemd timer (~5 min). Two things are delivered:
 #
 #   skills:  each skill SOURCE listed in /opt/go-jupyter/skill-sources.txt
-#            (geneontology/go-skills first) is a real git clone in every home,
-#            ~/<repo name>, with ~/.claude/skills/<skill> symlinked into it. The
-#            per-user work is go-jupyter-link-skills; this script decides WHEN
-#            (a source's ref moved, or --force) and runs it for every seeded user.
-#            A clone that is on <ref> and clean is fast-forwarded; one on a branch
-#            or with local changes is left alone (a curator editing a skill).
+#            (geneontology/go-skills first) is checked out ONCE, root-owned, under
+#            /var/lib/go-jupyter/skill-sources/<name> (the store), and every home's
+#            ~/.claude/skills/<skill> is a symlink into it. The per-user work is
+#            go-jupyter-link-skills; this script fetches the store when a source's
+#            ref moved (one ls-remote per source per tick) and runs the per-user
+#            link pass on EVERY tick, so a link someone removed or replaced is back
+#            within minutes (kltm, 2026-10-14; #87). A source marked `workspace`
+#            (go-ontology) also keeps a per-user clone for editing the repository
+#            itself; that clone is fast-forwarded only on ticks where its ref moved.
 #   news:    user-templates/<tmpl>/news/ -> ~/.go-jupyter/news/ (hard mirror; the
 #            per-user "seen" marker lives outside that directory on purpose).
 #
@@ -21,8 +24,9 @@
 #
 # Design notes that still hold from the rsync era:
 #   * NEVER DESTRUCTIVE. Anything a mirror overwrites is preserved under
-#     ~user/.go-jupyter/refresh-backups/<timestamp>/. Nothing here deletes a real
-#     directory under ~/.claude/skills.
+#     ~user/.go-jupyter/refresh-backups/<timestamp>/; a curator's copy that a
+#     canonical skill displaces goes to ~user/.go-jupyter/skill-overrides/ (see
+#     link-skills). Nothing here deletes a real directory under ~/.claude/skills.
 #   * EXPLICIT ESCAPE HATCH. `touch ~/.go-jupyter/hold-skills` makes this skip that
 #     user (and log it). Delete the file to resume.
 #   * NO HUB RESTART. Skill descriptions load at `claude` launch; a skill's body is
@@ -31,7 +35,8 @@
 #     template CLAUDE.md/README/.bashrc/.mcp.json are go-jupyter-refresh-user's.
 #
 # Usage: go-jupyter-sync-skills [--force]
-#   --force   run the per-user pass now regardless of what moved.
+#   --force   fetch the store and run the full per-user pass now regardless of
+#             what moved.
 #
 set -euo pipefail
 
@@ -81,28 +86,29 @@ if [ -f "$SOURCES" ]; then
     done < "$SOURCES"
 fi
 
-# 3. Is any seeded home missing a clone of a listed source (a clone that failed,
-#    a home created while the source was unreachable)? Nothing upstream moves
-#    for that, so without this check it would wait for the next unrelated
-#    trigger. Cheap: one directory test per home per source.
-missing_clone=0
+# 3. Is the store incomplete (first boot, or a clone that failed)? link-skills
+#    creates a missing checkout itself, but only a fetch brings an old one up to
+#    date, so an incomplete store is treated like a moved ref.
+store_missing=0
+STORE_DIR=/var/lib/go-jupyter/skill-sources
 if [ -f "$SOURCES" ]; then
-    while IFS=: read -r name _ uid _ _ home _; do
-        [ "${uid:-0}" -ge 1000 ] 2>/dev/null || continue
-        case "$name" in ubuntu | nobody) continue ;; esac
-        [ -f "$home/.seeded" ] || continue
-        [ -e "$home/.go-jupyter/hold-skills" ] && continue
-        while read -r url _; do
-            case "$url" in ''|'#'*) continue ;; esac
-            [ -d "$home/$(basename "$url" .git)/.git" ] || { missing_clone=1; break 2; }
-        done < "$SOURCES"
-    done < <(getent passwd)
+    while read -r url _; do
+        case "$url" in ''|'#'*) continue ;; esac
+        [ -d "$STORE_DIR/$(basename "$url" .git)/.git" ] || { store_missing=1; break; }
+    done < "$SOURCES"
 fi
 
-if [ "$FORCE" -eq 0 ] && [ "$repo_changed" -eq 0 ] && [ "$sources_changed" -eq 0 ] && [ "$missing_clone" -eq 0 ]; then
-    exit 0
+# The per-user link pass runs every tick (cheap: readlinks, no network). The
+# store fetch, the template mirror and the news mirror run only when something
+# moved, or with --force; so does the run log line, to keep quiet ticks quiet.
+full=0
+if [ "$FORCE" -eq 1 ] || [ "$repo_changed" -eq 1 ] || [ "$sources_changed" -eq 1 ] || [ "$store_missing" -eq 1 ]; then
+    full=1
+    log "run: template=${OLD:0:7}->${NEW:0:7} repo_changed=$repo_changed sources_changed=$sources_changed store_missing=$store_missing force=$FORCE"
 fi
-log "run: template=${OLD:0:7}->${NEW:0:7} repo_changed=$repo_changed sources_changed=$sources_changed missing_clone=$missing_clone force=$FORCE"
+if [ "$full" -eq 1 ] && [ -x "$LINK" ]; then
+    "$LINK" --update-store --sources "$SOURCES" >/dev/null || log "store update failed; linking against the store as it is"
+fi
 
 TS="$(date +%Y-%m-%dT%H%M%S)"
 mirrored=0
@@ -120,8 +126,18 @@ while IFS=: read -r name _ uid _ _ home _; do
 
     tmpl="$(head -n1 "$home/.seeded" 2>/dev/null | tr -d '[:space:]')"
     [ -n "$tmpl" ] || tmpl=researcher
-    src="$REPO/user-templates/$tmpl/.claude/skills"
 
+    # Links into the store: every tick. Workspace clones fetch only on a full run.
+    if [ -x "$LINK" ]; then
+        if [ "$sources_changed" -eq 1 ] || [ "$FORCE" -eq 1 ]; then
+            "$LINK" "$name" --sources "$SOURCES" --fetch >/dev/null || log "link-skills failed for $name"
+        else
+            "$LINK" "$name" --sources "$SOURCES" >/dev/null || log "link-skills failed for $name"
+        fi
+    fi
+    if [ "$full" -eq 0 ]; then continue; fi
+
+    src="$REPO/user-templates/$tmpl/.claude/skills"
     dst="$home/.claude/skills"
     bk="$home/.go-jupyter/refresh-backups/$TS/.claude/skills"
     mkdir -p "$dst" "$bk"
@@ -136,15 +152,6 @@ while IFS=: read -r name _ uid _ _ home _; do
         done
     fi
     chown -R "$name:$name" "$dst" "$home/.go-jupyter"
-
-    # Skill sources: clone/fast-forward and (re)link. Fetch only when a ref moved.
-    if [ -x "$LINK" ]; then
-        if [ "$sources_changed" -eq 1 ] || [ "$FORCE" -eq 1 ] || [ "$missing_clone" -eq 1 ]; then
-            "$LINK" "$name" --sources "$SOURCES" >/dev/null || log "link-skills failed for $name"
-        else
-            "$LINK" "$name" --sources "$SOURCES" --no-fetch >/dev/null || log "link-skills failed for $name"
-        fi
-    fi
 
     # News — same hard-mirror contract as skills. The per-user "have they seen
     # this yet" marker deliberately lives OUTSIDE this directory
@@ -163,4 +170,4 @@ while IFS=: read -r name _ uid _ _ home _; do
 done < <(getent passwd)
 
 printf '%s' "$newstate" > "$STATE"
-log "run done: users=$mirrored held=$held"
+[ "$full" -eq 0 ] || log "run done: users=$mirrored held=$held"

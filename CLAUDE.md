@@ -24,17 +24,22 @@ this file for the operating rules.
   geneontology/go-ontology second as a blobless sparse clone of its skills and
   `src/ontology`, two ODK-bound skills excluded from the personal links, though
   a session started inside `~/go-ontology` still sees them as project skills;
-  first listed wins a name collision). Skills are NOT authored in this repo: each user has a clone of
-  every source in their home and `~/.claude/skills/<skill>` links into it
-  (`scripts/go-jupyter-link-skills`, run by the timer, by `refresh-user`, and at
-  first login). The only skill directories left under
+  first listed wins a name collision). Skills are NOT authored in this repo, and not edited on the box
+  either (2026-10-14, #87): each source is checked out once, root-owned, under
+  `/var/lib/go-jupyter/skill-sources/<repo>` (the store), and
+  `~/.claude/skills/<skill>` links into it (`scripts/go-jupyter-link-skills`,
+  run by the timer on every tick, by `refresh-user`, and at first login;
+  `--update-store` is the fetch). A curator's copy under a canonical name is
+  set aside to `~/.go-jupyter/skill-overrides/`, never deleted; a curator's own
+  skill under another name is left alone by decision. `workspace` sources
+  (go-ontology) also keep a per-user clone, for editing the repository, not
+  the skills. The only skill directories left under
   `user-templates/*/.claude/skills/` are the tutorial's workshop-specific ones
   (`exercise`, `recap`), which stay out of go-skills for now by decision
-  (2026-09-28). Should another skill ever need to move out of a template, the
-  order is fixed: land it in go-skills, let `link-skills` run (it replaces a
-  home's copy with the link only when the copy is byte-identical to the
-  template's, so the template copy must still be in the repo at that point),
-  verify the homes show links, and only then delete the template copy.
+  (2026-09-28). Should another skill ever need to move out of a template: land
+  it in go-skills, let the link pass run (it sets each home's copy aside and
+  links the canonical one), verify the homes show links, then delete the
+  template copy.
 - `scripts/`, `systemd/` — boot and runtime helpers (skills sync timer, user
   add/refresh/migrate).
 - `etc/` — files cloud-init installs verbatim: `gitconfig` (system-wide git:

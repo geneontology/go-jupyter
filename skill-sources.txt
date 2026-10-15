@@ -5,23 +5,33 @@
 #                                  skills subdirectory; root files come along)
 #            exclude=<skill>[,..]  skills of this source not to link into ~/.claude/skills
 #                                  (they remain in the checkout, so a session started
-#                                  inside it still sees them as project skills)
+#                                  inside a workspace clone still sees them as
+#                                  project skills)
+#            workspace             also give each user a clone of the repository in
+#                                  the home (~/<repo name>) as their editing surface
+#                                  for the repository itself; skills still link to
+#                                  the store, never into that clone
 # Name collisions between sources: the source listed first wins, also when the later
 # source had the name first.
 #
-# Every seeded account gets a clone of each source in its home (~/<repo name>) and
-# a symlink ~/.claude/skills/<skill> -> that clone, for every skill the source
-# holds. Everything for everyone: there is no per-template list (kltm, 2026-09-28).
-# The clone is the curator's to edit: on a branch, or with local changes, it is
-# left alone by the timer; clean on <ref> it is fast-forwarded.
+# Each source is checked out once on the box, root-owned, under
+# /var/lib/go-jupyter/skill-sources/<repo name> (the store), and every seeded
+# account gets a symlink ~/.claude/skills/<skill> -> the store, for every skill the
+# source holds. Everything for everyone: there is no per-template list (kltm,
+# 2026-09-28). Nobody edits the store; a skill changes by a pull request to its
+# repository, and the merge is in every home within minutes (kltm, 2026-10-14, #87;
+# until then each home had its own editable clone). A curator's own skill, a real
+# directory in ~/.claude/skills under a name no source provides, is left alone.
 https://github.com/geneontology/go-skills.git main skills
 # go-ontology (kltm, 2026-09-29): its agent skills for ontology editing, with the
 # editable ontology tree (src/ontology, 173 MB) so the skills have their files
 # and the repo's CLAUDE.md applies when a session runs inside ~/go-ontology.
+# `workspace`: the per-user clone stays, as the place to edit the ontology and open
+# pull requests to go-ontology; the skills themselves link to the store.
 # go-ontology (kltm, 2026-09-29): the skills that work without the ODK container are
 # on; odk-make and souffle-datalog stay off. The container itself cannot run here yet
 # (#74), so `docker` and `robot` on the box are stand-ins (etc/stubs/) that print why
 # and fail cleanly; the parts of a skill that need them stop with that message, and
 # QC/reasoning run in go-ontology's CI on the pull request. runoak and obo-scripts are
 # installed. Remove the stand-ins when the toolchain arrives.
-https://github.com/geneontology/go-ontology.git master .claude/skills sparse=src/ontology exclude=odk-make,souffle-datalog
+https://github.com/geneontology/go-ontology.git master .claude/skills sparse=src/ontology exclude=odk-make,souffle-datalog workspace

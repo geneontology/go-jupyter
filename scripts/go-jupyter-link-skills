@@ -43,13 +43,16 @@
 #     is logged and not linked.
 #   * Respects ~/.go-jupyter/hold-skills (skips the user).
 #
-# Usage: go-jupyter-link-skills <user> [--fetch] [--sources FILE] [--store DIR] [--dry-run]
+# Usage: go-jupyter-link-skills <user> [--fetch] [--verbose] [--sources FILE] [--store DIR] [--dry-run]
 #        go-jupyter-link-skills --update-store [--sources FILE] [--store DIR] [--dry-run]
 #        go-jupyter-link-skills --home DIR --store DIR [...]      (non-root testing only)
 #
 #   <user>          link one user. A missing store checkout is created, but an
 #                   existing one is not fetched: --update-store is the fetch.
 #   --fetch         also fetch and fast-forward the user's workspace clones.
+#   --verbose       also log the steady-state lines (personal skills, clones left
+#                   in place, holds); without it a no-change run is silent in the
+#                   journal. go-jupyter-sync-skills passes it on full runs only.
 #   --update-store  clone or fast-forward every source in the store. Run once per
 #                   tick by go-jupyter-sync-skills when a source's ref moved, and
 #                   at first boot. Can be combined with <user>.
@@ -64,6 +67,7 @@ SOURCES=/opt/go-jupyter/skill-sources.txt
 STORE=/var/lib/go-jupyter/skill-sources
 FETCH=0
 DRY=0
+VERBOSE=0
 UPDATE_STORE=0
 USER_NAME=""
 HOME_OVERRIDE=""
@@ -73,6 +77,7 @@ while [ $# -gt 0 ]; do
         --fetch)        FETCH=1 ;;
         --no-fetch)     FETCH=0 ;;             # accepted for older callers
         --dry-run)      DRY=1 ;;
+        --verbose)      VERBOSE=1 ;;
         --update-store) UPDATE_STORE=1 ;;
         --sources)      SOURCES="${2:-}"; shift ;;
         --store)        STORE="${2:-}"; shift ;;
@@ -85,7 +90,8 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-log() { if [ "$(id -u)" -eq 0 ]; then logger -t go-jupyter-link-skills -- "$*"; fi; echo "  $*"; }
+log() { if [ "$(id -u)" -eq 0 ] && [ "$DRY" -eq 0 ]; then logger -t go-jupyter-link-skills -- "$*"; fi; echo "  $*"; }
+info() { if [ "$VERBOSE" -eq 1 ] || [ "$DRY" -eq 1 ]; then log "$@"; fi; }
 run() { if [ "$DRY" -eq 1 ]; then echo "  would: $*"; else "$@"; fi; }
 
 if [ -n "$HOME_OVERRIDE" ]; then
@@ -132,21 +138,25 @@ done < "$SOURCES"
 
 # ---- the store -------------------------------------------------------------
 # clone_into DIR URL REF SUBDIR SPARSE [as_user]  — a fresh clone, sparse when asked.
+# The clone is made under a temporary name and moved into place when complete,
+# so a half-finished clone is never mistaken for a checkout.
 clone_into() {
-    local dir="$1" url="$2" ref="$3" subdir="$4" sparse="$5" who="${6:-}" dirs
+    local dir="$1" url="$2" ref="$3" subdir="$4" sparse="$5" who="${6:-}" dirs tmp
+    tmp="$dir.tmp.$$"
     if [ -n "$sparse" ]; then
         dirs="$(printf '%s' "$subdir,$sparse" | tr ',' ' ')"
         if [ "$DRY" -eq 1 ]; then echo "  would: git clone --filter=blob:none --no-checkout --branch $ref $url $dir; sparse-checkout set --cone $dirs; checkout $ref"; return 0; fi
         # shellcheck disable=SC2086
-        if ! { $who git clone -q --filter=blob:none --no-checkout --branch "$ref" "$url" "$dir" \
-               && $who git -C "$dir" sparse-checkout set --cone $dirs \
-               && $who git -C "$dir" checkout -q "$ref"; } 2>/dev/null; then
-            $who rm -rf -- "$dir"; return 1
+        if ! { $who git clone -q --filter=blob:none --no-checkout --branch "$ref" "$url" "$tmp" \
+               && $who git -C "$tmp" sparse-checkout set --cone $dirs \
+               && $who git -C "$tmp" checkout -q "$ref" \
+               && $who mv -- "$tmp" "$dir"; } 2>/dev/null; then
+            $who rm -rf -- "$tmp"; return 1
         fi
     else
         if [ "$DRY" -eq 1 ]; then echo "  would: git clone --branch $ref $url $dir"; return 0; fi
-        if ! $who git clone -q --branch "$ref" "$url" "$dir" 2>/dev/null; then
-            $who rm -rf -- "$dir"; return 1
+        if ! { $who git clone -q --branch "$ref" "$url" "$tmp" && $who mv -- "$tmp" "$dir"; } 2>/dev/null; then
+            $who rm -rf -- "$tmp"; return 1
         fi
     fi
 }
@@ -180,9 +190,10 @@ ensure_store() {
     done
 }
 
-# One store maintainer at a time: the timer's --update-store and a first-login
-# seed can run together, and two clones of the same directory would wreck each
-# other. The lock covers only the store work; per-user passes run unlocked.
+# One run at a time: the timer, a first-login seed and an operator's refresh can
+# overlap, and two clones of the same directory (or two set-asides in one home)
+# would wreck each other. The lock is held for the whole run; a child git
+# inherits the descriptor, so an orphaned clone keeps it until it exits.
 [ -d "$(dirname "$STORE")" ] || run mkdir -p "$(dirname "$STORE")"
 locked=0
 if [ "$DRY" -eq 0 ]; then
@@ -192,11 +203,10 @@ fi
 if [ "$DRY" -eq 1 ] || [ "$locked" -eq 1 ]; then
     if [ "$UPDATE_STORE" -eq 1 ]; then ensure_store update; else ensure_store; fi
 fi
-[ "$DRY" -eq 1 ] || exec 9>&-
 [ -n "$USER_NAME" ] || exit 0
 
 # ---- one user ----------------------------------------------------------------
-if [ -e "$home/.go-jupyter/hold-skills" ]; then log "hold $USER_NAME (hold-skills present)"; exit 0; fi
+if [ -e "$home/.go-jupyter/hold-skills" ]; then info "hold $USER_NAME (hold-skills present)"; exit 0; fi
 
 skills_dir="$home/.claude/skills"
 if [ ! -d "$skills_dir" ]; then run mkdir -p "$skills_dir"; own "$skills_dir"; fi
@@ -212,7 +222,7 @@ for i in "${!src_url[@]}"; do
         skill="$(basename "$d")"
         case ",${src_exclude[$i]}," in *",$skill,"*) continue ;; esac
         if [ -n "${want[$skill]:-}" ]; then
-            log "$USER_NAME: $skill is already provided by ${provider[$skill]} (listed first); ${src_name[$i]}'s copy not linked"
+            info "$USER_NAME: $skill is already provided by ${provider[$skill]} (listed first); ${src_name[$i]}'s copy not linked"
             continue
         fi
         want["$skill"]="$sdir/$skill"; provider["$skill"]="${src_name[$i]}"
@@ -290,14 +300,14 @@ if [ "$store_complete" -eq 1 ]; then
         if ours_link "$t"; then log "$USER_NAME: removing link $skill -> $t (no longer provided)"; run rm -f -- "$l"; fi
     done
 else
-    log "$USER_NAME: store incomplete; leaving existing links in place"
+    info "$USER_NAME: store incomplete; leaving existing links in place"
 fi
 
 # Personal skills: logged, never touched. The login banner lists them for the user.
 for d in "$skills_dir"/*/; do
     [ -d "$d" ] && [ ! -L "${d%/}" ] && [ -f "$d/SKILL.md" ] || continue
     skill="$(basename "$d")"
-    [ -n "${want[$skill]:-}" ] || log "$USER_NAME: personal skill $skill (not in any source); left alone"
+    [ -n "${want[$skill]:-}" ] || info "$USER_NAME: personal skill $skill (not in any source); left alone"
 done
 
 # Workspace clones (kept, the curator's editing surface) and retired clones.
@@ -311,7 +321,7 @@ for i in "${!src_url[@]}"; do
                 || log "$USER_NAME: clone of ${src_url[$i]} failed; will retry next run"
         elif [ "$FETCH" -eq 1 ]; then
             branch="$(as_user git -C "$clone" symbolic-ref --short -q HEAD 2>/dev/null || echo DETACHED)"
-            modified="$(as_user git -C "$clone" status --porcelain --untracked-files=no 2>/dev/null | head -1)"
+            modified="$(as_user git -C "$clone" status --porcelain --untracked-files=no 2>/dev/null | head -1 || true)"
             if [ "$branch" = "$ref" ] && [ -z "$modified" ]; then
                 if [ "$DRY" -eq 1 ]; then echo "  would: fast-forward $clone to origin/$ref"; else
                     as_user git -C "$clone" fetch -q origin "$ref" 2>/dev/null \
@@ -319,14 +329,19 @@ for i in "${!src_url[@]}"; do
                         || log "$USER_NAME: could not fast-forward $clone (local commits, or an untracked file in the way); left as is"
                 fi
             else
-                log "$USER_NAME: $clone left alone (branch=$branch${modified:+, modified files}) — curator work in progress"
+                info "$USER_NAME: $clone left alone (branch=$branch${modified:+, modified files}) — curator work in progress"
             fi
         fi
     elif [ -d "$clone/.git" ]; then
+        # Retire only once the store serves this source (the links were just
+        # retargeted); otherwise the move would leave the home without skills.
+        if [ ! -d "$STORE/$name/${src_sub[$i]}" ]; then info "$USER_NAME: $name not in the store yet; $clone kept"; continue; fi
         branch="$(as_user git -C "$clone" symbolic-ref --short -q HEAD 2>/dev/null || echo DETACHED)"
-        modified="$(as_user git -C "$clone" status --porcelain --untracked-files=no 2>/dev/null | head -1)"
+        modified="$(as_user git -C "$clone" status --porcelain --untracked-files=no 2>/dev/null | head -1 || true)"
         unpushed="$(as_user git -C "$clone" rev-list --count '@{u}..HEAD' 2>/dev/null || echo '?')"
-        if [ "$branch" = "$ref" ] && [ -z "$modified" ] && [ "$unpushed" = "0" ]; then
+        origin="$(as_user git -C "$clone" remote get-url origin 2>/dev/null || true)"
+        origin_ok=""; [ "${origin%/}" = "${src_url[$i]%/}" ] || [ "${origin%.git}" = "${src_url[$i]%.git}" ] && origin_ok=1
+        if [ "$branch" = "$ref" ] && [ -z "$modified" ] && [ "$unpushed" = "0" ] && [ -n "$origin_ok" ]; then
             retired="$home/.go-jupyter/retired"
             run as_user mkdir -p "$retired"
             if [ "$DRY" -eq 0 ] && [ ! -f "$retired/README.md" ]; then
@@ -343,7 +358,7 @@ README
             run as_user mv -- "$clone" "$retired/$name-$TS"
             log "$USER_NAME: retired $clone -> $retired/$name-$TS (untouched clone; its skills now link from the store)"
         else
-            log "$USER_NAME: $clone left in place (branch=$branch${modified:+, modified files}${unpushed:+, unpushed=$unpushed}); skills no longer link into it; retire by hand"
+            info "$USER_NAME: $clone left in place (branch=$branch${modified:+, modified files}${unpushed:+, unpushed=$unpushed}${origin_ok:+}${origin_ok:-, origin is not the source}); skills no longer link into it; retire by hand"
         fi
     fi
 done

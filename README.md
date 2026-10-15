@@ -292,8 +292,10 @@ Facts the picture leaves out:
 - The store is `/var/lib/go-jupyter/skill-sources/<repo>`. It is fetched when a
   source's ref moves (one `ls-remote` per source per tick) or on
   `go-jupyter-sync-skills --force`. The per-home link pass runs on every tick
-  and never fetches, so a link that was removed or replaced is back within
-  about five minutes.
+  and never fetches the store (workspace clones are fetched only on a tick
+  where their ref moved), so a link that was removed or replaced is back
+  within about five minutes. A quiet tick logs nothing; the steady-state lines
+  (personal skills, clones left in place, holds) appear only on full runs.
 - Nobody can edit the store. A copy in `~/.claude/skills` under a canonical
   name, whatever it is, is moved to `~/.go-jupyter/skill-overrides/<timestamp>/`
   with a README and announced at the next login. Nothing is deleted.

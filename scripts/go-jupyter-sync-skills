@@ -78,7 +78,7 @@ newstate=""
 if [ -f "$SOURCES" ]; then
     while read -r url ref _; do
         case "$url" in ''|'#'*) continue ;; esac
-        sha="$(git ls-remote -q "$url" "refs/heads/$ref" 2>/dev/null | cut -f1)"
+        sha="$(git ls-remote -q "$url" "refs/heads/$ref" 2>/dev/null | cut -f1 || true)"
         [ -n "$sha" ] || { log "ls-remote failed for $url $ref; treating as unchanged"; sha="$(awk -v u="$url" -v r="$ref" '$1==u && $2==r {print $3}' "$STATE")"; }
         old="$(awk -v u="$url" -v r="$ref" '$1==u && $2==r {print $3}' "$STATE")"
         [ "$sha" = "$old" ] || sources_changed=1
@@ -130,7 +130,9 @@ while IFS=: read -r name _ uid _ _ home _; do
     # Links into the store: every tick. Workspace clones fetch only on a full run.
     if [ -x "$LINK" ]; then
         if [ "$sources_changed" -eq 1 ] || [ "$FORCE" -eq 1 ]; then
-            "$LINK" "$name" --sources "$SOURCES" --fetch >/dev/null || log "link-skills failed for $name"
+            "$LINK" "$name" --sources "$SOURCES" --fetch --verbose >/dev/null || log "link-skills failed for $name"
+        elif [ "$full" -eq 1 ]; then
+            "$LINK" "$name" --sources "$SOURCES" --verbose >/dev/null || log "link-skills failed for $name"
         else
             "$LINK" "$name" --sources "$SOURCES" >/dev/null || log "link-skills failed for $name"
         fi
@@ -149,9 +151,10 @@ while IFS=: read -r name _ uid _ _ home _; do
             sk="$(basename "$sd")"
             [ -L "$dst/$sk" ] && continue
             rsync -a --delete --backup --backup-dir="$bk/$sk" "$sd" "$dst/$sk/"
+            chown -R "$name:$name" "$dst/$sk"
         done
     fi
-    chown -R "$name:$name" "$dst" "$home/.go-jupyter"
+    chown -R "$name:$name" "$home/.go-jupyter"
 
     # News — same hard-mirror contract as skills. The per-user "have they seen
     # this yet" marker deliberately lives OUTSIDE this directory

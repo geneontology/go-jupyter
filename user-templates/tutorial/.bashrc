@@ -56,7 +56,8 @@ if [[ $- == *i* ]] && [ -t 0 ]; then
   _tmpl="$(head -n1 "$HOME/.seeded" 2>/dev/null | tr -d '[:space:]')"; [ -n "$_tmpl" ] || _tmpl=researcher
   _personal=""
   for _d in "$HOME"/.claude/skills/*/; do
-    [ -d "$_d" ] && [ ! -L "${_d%/}" ] && [ -f "$_d/SKILL.md" ] || continue
+    [ -d "$_d" ] && [ -f "$_d/SKILL.md" ] || continue
+    case "$(readlink "${_d%/}" 2>/dev/null)" in /var/lib/go-jupyter/skill-sources/*) continue ;; esac
     [ -d "/opt/go-jupyter/user-templates/$_tmpl/.claude/skills/$(basename "$_d")" ] && continue
     _personal="$_personal $(basename "$_d")"
   done

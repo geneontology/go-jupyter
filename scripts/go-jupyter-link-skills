@@ -65,6 +65,7 @@ umask 022
 
 SOURCES=/opt/go-jupyter/skill-sources.txt
 STORE=/var/lib/go-jupyter/skill-sources
+TEMPLATE_ROOT=/opt/go-jupyter/user-templates
 FETCH=0
 DRY=0
 VERBOSE=0
@@ -98,7 +99,7 @@ if [ -n "$HOME_OVERRIDE" ]; then
     [ "$(id -u)" -ne 0 ] || { echo "--home is for non-root testing only" >&2; exit 2; }
     [ "$STORE" != /var/lib/go-jupyter/skill-sources ] || { echo "--home needs --store DIR" >&2; exit 2; }
     home="$HOME_OVERRIDE"; USER_NAME="$(id -un)"
-    as_user() { "$@"; }
+    as_user() { "$@" 9>&-; }
     own() { [ "$DRY" -eq 1 ] || chown -h "$(id -u):$(id -g)" "$@"; }   # exercises the same path as root
 else
     [ "$(id -u)" -eq 0 ] || { echo "must run as root (try: sudo $0 $*)" >&2; exit 2; }
@@ -108,7 +109,7 @@ else
     elif [ "$UPDATE_STORE" -eq 0 ]; then
         echo "usage: $0 <user> [--fetch] [--sources FILE] [--store DIR] [--dry-run] | --update-store" >&2; exit 2
     fi
-    as_user() { runuser -u "$USER_NAME" -- env HOME="$home" "$@"; }
+    as_user() { runuser -u "$USER_NAME" -- env HOME="$home" "$@" 9>&-; }
     own() { [ "$DRY" -eq 1 ] || chown -h "$USER_NAME:$USER_NAME" "$@"; }
 fi
 
@@ -150,12 +151,12 @@ clone_into() {
         if ! { $who git clone -q --filter=blob:none --no-checkout --branch "$ref" "$url" "$tmp" \
                && $who git -C "$tmp" sparse-checkout set --cone $dirs \
                && $who git -C "$tmp" checkout -q "$ref" \
-               && $who mv -- "$tmp" "$dir"; } 2>/dev/null; then
+               && $who mv -- "$tmp" "$dir"; } 2>/dev/null 9>&-; then
             $who rm -rf -- "$tmp"; return 1
         fi
     else
         if [ "$DRY" -eq 1 ]; then echo "  would: git clone --branch $ref $url $dir"; return 0; fi
-        if ! { $who git clone -q --branch "$ref" "$url" "$tmp" && $who mv -- "$tmp" "$dir"; } 2>/dev/null; then
+        if ! { $who git clone -q --branch "$ref" "$url" "$tmp" && $who mv -- "$tmp" "$dir"; } 2>/dev/null 9>&-; then
             $who rm -rf -- "$tmp"; return 1
         fi
     fi
@@ -163,7 +164,7 @@ clone_into() {
 
 # A usable checkout has .git, a HEAD, and the skills subdirectory checked out (a
 # clone interrupted before its checkout has the first two and nothing else).
-store_ok() { [ -d "$1/.git" ] && git -C "$1" rev-parse -q --verify HEAD >/dev/null 2>&1 && [ -d "$1/$2" ]; }
+store_ok() { [ -d "$1/.git" ] && git -C "$1" rev-parse -q --verify HEAD >/dev/null 2>&1 9>&- && [ -d "$1/$2" ]; }
 
 # A clone killed before it was moved into place leaves <dir>.tmp.<pid>; once that
 # pid is gone the directory is debris of ours and is removed.
@@ -192,10 +193,10 @@ ensure_store() {
                 || log "store: clone of ${src_url[$i]} failed; its skills are not linked until the next run"
         elif [ -n "$update" ]; then
             if [ "$DRY" -eq 1 ]; then echo "  would: fast-forward $dir to origin/${src_ref[$i]}"; continue; fi
-            if git -C "$dir" fetch -q origin "${src_ref[$i]}" 2>/dev/null; then
-                if ! git -C "$dir" merge -q --ff-only FETCH_HEAD 2>/dev/null; then
+            if git -C "$dir" -c gc.auto=0 fetch -q origin "${src_ref[$i]}" 2>/dev/null 9>&-; then
+                if ! git -C "$dir" -c gc.auto=0 merge -q --ff-only FETCH_HEAD 2>/dev/null 9>&-; then
                     log "store: $dir cannot fast-forward (history rewritten upstream?); resetting to origin/${src_ref[$i]}"
-                    git -C "$dir" reset -q --hard FETCH_HEAD
+                    git -C "$dir" reset -q --hard FETCH_HEAD 9>&-
                 fi
             else
                 log "store: fetch of ${src_url[$i]} failed; keeping $(git -C "$dir" rev-parse --short HEAD)"
@@ -206,8 +207,10 @@ ensure_store() {
 
 # One run at a time: the timer, a first-login seed and an operator's refresh can
 # overlap, and two clones of the same directory (or two set-asides in one home)
-# would wreck each other. The lock is held for the whole run; a child git
-# inherits the descriptor, so an orphaned clone keeps it until it exits.
+# would wreck each other. The lock is held for the whole run and released at
+# exit. Children never inherit descriptor 9 (`9>&-` on every spawn): on
+# 2026-10-15 a background `git gc --auto`, started by a workspace fetch, held
+# the lock for 36 minutes and every later pass waited the full 15 minutes.
 [ -d "$(dirname "$STORE")" ] || run mkdir -p "$(dirname "$STORE")"
 locked=0
 if [ "$DRY" -eq 0 ]; then
@@ -303,9 +306,13 @@ if [ "$set_aside_n" -gt 0 ] && [ "$DRY" -eq 0 ]; then
     as_user touch "$home/.go-jupyter/skill-overrides/.unseen"
 fi
 
-# Links of ours whose skill is no longer provided (removed or excluded upstream).
-# Skipped when any source is missing from the store: a failed clone must not
-# strip a home of its links until the next successful fetch.
+# Links of ours whose skill is no longer provided: a store link under a name no
+# source provides any more (removed or excluded upstream), or an old-layout link
+# (../../<clone>/...) whose target is gone. An old-layout link whose target still
+# exists is a skill living in a clone that was left in place (a curator's draft
+# on a branch): it is theirs and stays. Skipped when any source is missing from
+# the store: a failed clone must not strip a home of its links until the next
+# successful fetch.
 store_complete=1
 for i in "${!src_url[@]}"; do [ -d "$STORE/${src_name[$i]}/${src_sub[$i]}" ] || store_complete=0; done
 if [ "$store_complete" -eq 1 ]; then
@@ -314,17 +321,25 @@ if [ "$store_complete" -eq 1 ]; then
         skill="$(basename "$l")"
         [ -n "${want[$skill]:-}" ] && continue
         t="$(readlink "$l")"
-        if ours_link "$t" "$skill"; then log "$USER_NAME: removing link $skill -> $t (no longer provided)"; run rm -f -- "$l"; fi
+        ours_link "$t" "$skill" || continue
+        case "$t" in
+            "$STORE"/*) log "$USER_NAME: removing link $skill -> $t (no longer provided)"; run rm -f -- "$l" ;;
+            *) if [ ! -e "$l" ]; then log "$USER_NAME: removing dangling link $skill -> $t"; run rm -f -- "$l"; fi ;;
+        esac
     done
 else
     info "$USER_NAME: store incomplete; leaving existing links in place"
 fi
 
-# Personal skills: logged, never touched. The login banner lists them for the user.
+# Personal skills: logged, never touched. The login banner lists them for the
+# user. A template-carried skill (user-templates/<tmpl>/.claude/skills/<name>,
+# <tmpl> from ~/.seeded) is the template's, not the curator's.
+tmpl="$(head -n1 "$home/.seeded" 2>/dev/null | tr -d '[:space:]')"; [ -n "$tmpl" ] || tmpl=researcher
 for d in "$skills_dir"/*/; do
     [ -d "$d" ] && [ ! -L "${d%/}" ] && [ -f "$d/SKILL.md" ] || continue
     skill="$(basename "$d")"
-    [ -n "${want[$skill]:-}" ] || [ -n "${excluded[$skill]:-}" ] || info "$USER_NAME: personal skill $skill (not in any source); left alone"
+    [ -n "${want[$skill]:-}" ] || [ -n "${excluded[$skill]:-}" ] || [ -d "$TEMPLATE_ROOT/$tmpl/.claude/skills/$skill" ] \
+        || info "$USER_NAME: personal skill $skill (not in any source); left alone"
 done
 
 # Workspace clones (kept, the curator's editing surface) and retired clones.
@@ -341,8 +356,8 @@ for i in "${!src_url[@]}"; do
             modified="$(as_user git -C "$clone" status --porcelain --untracked-files=no 2>/dev/null | head -1 || true)"
             if [ "$branch" = "$ref" ] && [ -z "$modified" ]; then
                 if [ "$DRY" -eq 1 ]; then echo "  would: fast-forward $clone to origin/$ref"; else
-                    as_user git -C "$clone" fetch -q origin "$ref" 2>/dev/null \
-                        && as_user git -C "$clone" merge -q --ff-only FETCH_HEAD 2>/dev/null \
+                    as_user git -C "$clone" -c gc.auto=0 fetch -q origin "$ref" 2>/dev/null \
+                        && as_user git -C "$clone" -c gc.auto=0 merge -q --ff-only FETCH_HEAD 2>/dev/null \
                         || log "$USER_NAME: could not fast-forward $clone (local commits, or an untracked file in the way); left as is"
                 fi
             else

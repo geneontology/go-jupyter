@@ -180,7 +180,19 @@ ensure_store() {
     done
 }
 
-if [ "$UPDATE_STORE" -eq 1 ]; then ensure_store update; else ensure_store; fi
+# One store maintainer at a time: the timer's --update-store and a first-login
+# seed can run together, and two clones of the same directory would wreck each
+# other. The lock covers only the store work; per-user passes run unlocked.
+[ -d "$(dirname "$STORE")" ] || run mkdir -p "$(dirname "$STORE")"
+locked=0
+if [ "$DRY" -eq 0 ]; then
+    exec 9>"$STORE.lock"
+    if flock -w 900 9; then locked=1; else log "store: could not get the lock within 15 min; linking against the store as it is"; fi
+fi
+if [ "$DRY" -eq 1 ] || [ "$locked" -eq 1 ]; then
+    if [ "$UPDATE_STORE" -eq 1 ]; then ensure_store update; else ensure_store; fi
+fi
+[ "$DRY" -eq 1 ] || exec 9>&-
 [ -n "$USER_NAME" ] || exit 0
 
 # ---- one user ----------------------------------------------------------------
@@ -265,13 +277,21 @@ if [ "$set_aside_n" -gt 0 ] && [ "$DRY" -eq 0 ]; then
 fi
 
 # Links of ours whose skill is no longer provided (removed or excluded upstream).
-for l in "$skills_dir"/*; do
-    [ -L "$l" ] || continue
-    skill="$(basename "$l")"
-    [ -n "${want[$skill]:-}" ] && continue
-    t="$(readlink "$l")"
-    if ours_link "$t"; then log "$USER_NAME: removing link $skill -> $t (no longer provided)"; run rm -f -- "$l"; fi
-done
+# Skipped when any source is missing from the store: a failed clone must not
+# strip a home of its links until the next successful fetch.
+store_complete=1
+for i in "${!src_url[@]}"; do [ -d "$STORE/${src_name[$i]}/${src_sub[$i]}" ] || store_complete=0; done
+if [ "$store_complete" -eq 1 ]; then
+    for l in "$skills_dir"/*; do
+        [ -L "$l" ] || continue
+        skill="$(basename "$l")"
+        [ -n "${want[$skill]:-}" ] && continue
+        t="$(readlink "$l")"
+        if ours_link "$t"; then log "$USER_NAME: removing link $skill -> $t (no longer provided)"; run rm -f -- "$l"; fi
+    done
+else
+    log "$USER_NAME: store incomplete; leaving existing links in place"
+fi
 
 # Personal skills: logged, never touched. The login banner lists them for the user.
 for d in "$skills_dir"/*/; do

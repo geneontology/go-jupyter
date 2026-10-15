@@ -140,7 +140,11 @@ cloud-init (never committed, never in the repo's history):
     between a user's own sessions, which is why the template rule is `mktemp`
     everywhere, never a fixed name.
   - A user's server log is `journalctl -u jupyter-<user>-singleuser`, no longer
-    the hub's journal; `systemctl list-units 'jupyter-*'` lists who is up.
+    the hub's journal; `systemctl list-units 'jupyter-*'` lists who is up. A
+    spawn that `systemd-run` refuses (a bad property, a D-Bus failure) is not
+    reported at once: the spawner polls for the unit for the full
+    `start_timeout` (300 s) before the hub shows an error, and the reason is
+    in `journalctl -u jupyterhub` from the moment of the click.
   - The spawner's `disable_user_sudo` is off: its `NoNewPrivileges` also
     drops file capabilities, which breaks `ping` on Ubuntu 24.04. Nothing
     about setuid changes from before; no curator has sudo anyway.

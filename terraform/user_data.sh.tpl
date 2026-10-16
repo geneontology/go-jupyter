@@ -400,6 +400,7 @@ systemctl enable --now go-jupyter-update-claude.timer
 # next tick picks it up. The script sources the keys only around the hook,
 # never into a session's or the unit's environment.
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-trace-sync" /usr/local/sbin/go-jupyter-trace-sync
+install -m 0755 "$REPO_DIR/scripts/go-jupyter-redact-transcript" /usr/local/sbin/go-jupyter-redact-transcript
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-trace-sync.service" /etc/systemd/system/go-jupyter-trace-sync.service
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-trace-sync.timer" /etc/systemd/system/go-jupyter-trace-sync.timer
 install -d -m 0700 /var/lib/go-jupyter/traces /var/lib/go-jupyter/langfuse-state

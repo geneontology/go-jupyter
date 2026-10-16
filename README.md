@@ -191,10 +191,15 @@ cloud-init (never committed, never in the repo's history):
   `/etc/go-jupyter/langfuse.env` exists (`LANGFUSE_PUBLIC_KEY`,
   `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`; written by cloud-init from
   `langfuse_env_path`, or placed by hand on a running box, mode 0600, no
-  restart), each archived transcript that changed since the previous run is
-  handed to Langfuse's own Claude Code hook (`vendor/langfuse/`, run with the
-  project venv's python), which sends one trace per completed turn: the full
-  prompt, the assistant's text, tool inputs and outputs, with user id
+  restart), each archived transcript is first mirrored into
+  `/var/lib/go-jupyter/traces/<user>/redacted/` through
+  `go-jupyter-redact-transcript`, which masks credential-shaped values
+  (barista and GitHub tokens, API keys, bearer headers, `KEY=value` lines
+  such as a `cat ~/.env`) and leaves everything else byte for byte; only the
+  mirror is sent. Each mirrored transcript that changed since the previous
+  run is handed to Langfuse's own Claude Code hook (`vendor/langfuse/`, run
+  with the project venv's python), which sends one trace per completed turn:
+  the full prompt, the assistant's text, tool inputs and outputs, with user id
   `github:<login>` for accounts in the GitHub allowlist (`local:<host>:<user>`
   otherwise) and the tag `box:<host>`. The hook keeps a byte offset per
   transcript under `/var/lib/go-jupyter/langfuse-state`, so nothing is sent

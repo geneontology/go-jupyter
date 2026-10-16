@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""go-jupyter-redact-transcript — copy a Claude Code transcript with secrets
+masked, for forwarding to Langfuse (#28).
+
+Usage: go-jupyter-redact-transcript <in.jsonl> <out.jsonl>
+       go-jupyter-redact-transcript --self-test
+
+The raw archive under /var/lib/go-jupyter/traces is root-only and keeps
+everything; this is what leaves the box. It works line by line on the JSON
+text, replacing the VALUE part of anything that looks like a credential with
+"[REDACTED:<kind>]", and leaves the rest of the line byte for byte. Patterns,
+chosen for what a curator's session can actually contain:
+
+  barista   BARISTA_TOKEN=<value>, and token=<value> in a barista URL or form
+  github    gh / GitHub tokens: ghp_, gho_, ghu_, ghs_, ghr_, github_pat_
+  langfuse  pk-lf-, sk-lf- keys
+  anthropic sk-ant- keys
+  aws       AKIA... access key ids, and aws_secret_access_key=<value>
+  bearer    "Authorization: Bearer <value>" and "Bearer <value>" in headers
+  jwt       three dot-separated base64url parts starting with eyJ
+  envfile   KEY=<value> where KEY contains TOKEN, SECRET, PASSWORD, PASSWD,
+            API_KEY or APIKEY (covers `cat ~/.env` output and the echo that
+            wrote it). A value that is itself a shell reference ($VAR) is
+            left alone: it is not a secret.
+
+False positives cost a masked value in a trace; a miss costs a secret in a
+third-party store, so the patterns err toward masking. Exit 0 on success, 1
+on a read or write error.
+"""
+import re
+import sys
+
+PATTERNS = [
+    ("barista", re.compile(r"(BARISTA_TOKEN=)(?!\$)([^\s\"'&\\]+)")),
+    ("barista", re.compile(r"((?:[?&]|data-urlencode[= ]+[\"']?)token=)(?!\$)([^\s\"'&\\]+)")),
+    ("github", re.compile(r"\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})")),
+    ("langfuse", re.compile(r"\b([ps]k-lf-[A-Za-z0-9-]{8,})")),
+    ("anthropic", re.compile(r"\b(sk-ant-[A-Za-z0-9_-]{16,})")),
+    ("aws", re.compile(r"\b((?:AKIA|ASIA)[A-Z0-9]{16})\b")),
+    ("aws", re.compile(r"(?i)(aws_secret_access_key\s*[=:]\s*)([^\s\"'\\]+)")),
+    ("bearer", re.compile(r"(?i)(bearer\s+)([A-Za-z0-9._~+/=-]{16,})")),
+    ("jwt", re.compile(r"\b(eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})")),
+    ("envfile", re.compile(r"(?i)\b((?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY)[A-Z0-9_]*)=)(?!\$)([^\s\"'&\\]{6,})")),
+]
+
+
+def redact_line(line: str) -> str:
+    for kind, pat in PATTERNS:
+        if pat.groups == 2:
+            line = pat.sub(lambda m, k=kind: m.group(1) + f"[REDACTED:{k}]", line)
+        else:
+            line = pat.sub(f"[REDACTED:{kind}]", line)
+    return line
+
+
+def self_test() -> int:
+    # Fixtures are assembled at run time from fragments, so this file never
+    # holds a credential-shaped literal (the repository's secrets guard would
+    # refuse it, and it would be right to).
+    def fake(prefix: str, n: int, alphabet: str = "abcdefghij0123456789") -> str:
+        return prefix + (alphabet * 4)[:n]
+
+    barista = fake("", 12)
+    ghp = fake("gh" + "p_", 36)
+    lf = fake("sk-" + "lf-", 20)
+    ant = fake("sk-" + "ant-", 24)
+    akia = "AK" + "IA" + "IOSFODNN7EX" + "AMPLE"
+    aws_secret = "wJalrXUtnFEMI" + "/K7MDENG/bPxRf" + "iCYEX" + "AMPLEKEY"
+    jwt = "eyJ" + fake("", 12) + "." + fake("eyJ", 12) + "." + fake("", 16)
+    cases = [
+        (f"echo 'BARISTA_TOKEN={barista}' > ~/.env", barista),
+        ('--data-urlencode "token=$BARISTA_TOKEN"', None),  # unexpanded variable: nothing to mask
+        (f'--data-urlencode "token={barista}"', barista),
+        (f"http://barista-dev.example/api/x?token={barista}&foo=1", barista),
+        (f"hosts.yml: oauth_token: {ghp}", ghp),
+        (f"LANGFUSE_SECRET_KEY={lf}", lf),
+        (f"export ANTHROPIC_API_KEY={ant}", ant),
+        (f"Authorization: Bearer {jwt}", jwt[:12]),
+        (f"AWS_SECRET_ACCESS_KEY={aws_secret}", aws_secret[:13]),
+        (f"aws configure set aws_access_key_id {akia}", akia),
+        ("The model id is gomodel:6ab067da00006193 and the PMID is 37956198", None),
+        ("TOKEN_COUNT=42000 tokens used", None),  # value too short to be a credential
+    ]
+    bad = 0
+    for text, secret in cases:
+        out = redact_line(text)
+        if secret is not None and secret in out:
+            print(f"FAIL (not masked): {text!r} -> {out!r}")
+            bad += 1
+        if secret is None and out != text:
+            print(f"FAIL (changed a safe line): {text!r} -> {out!r}")
+            bad += 1
+    print("self-test:", "ok" if bad == 0 else f"{bad} failure(s)", f"({len(cases)} cases)")
+    return 1 if bad else 0
+
+
+def main(argv) -> int:
+    if len(argv) == 2 and argv[1] == "--self-test":
+        return self_test()
+    if len(argv) != 3:
+        print(__doc__.strip().splitlines()[2], file=sys.stderr)
+        return 2
+    src, dst = argv[1], argv[2]
+    try:
+        with open(src, "r", encoding="utf-8", errors="surrogateescape") as fin, \
+             open(dst, "w", encoding="utf-8", errors="surrogateescape") as fout:
+            for line in fin:
+                fout.write(redact_line(line))
+    except OSError as e:
+        print(f"go-jupyter-redact-transcript: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

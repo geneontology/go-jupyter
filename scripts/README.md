@@ -96,8 +96,11 @@ Installed to `/usr/local/sbin` by cloud-init and run every five minutes by
 seeded account (the same set `go-jupyter-refresh-user --all` acts on) it
 rsyncs `~/.claude/projects/` into `/var/lib/go-jupyter/traces/<user>/projects/`
 (root-only, never deleted from), and, when `/etc/go-jupyter/langfuse.env` is
-present, runs the vendored Langfuse hook (`/opt/go-jupyter/vendor/langfuse/
-langfuse_hook.py`, with `/opt/go-jupyter/.venv/bin/python`) on every archived
+present, mirrors the archive into `.../<user>/redacted/` through
+`go-jupyter-redact-transcript` (credential-shaped values masked, source
+mtimes kept; `go-jupyter-redact-transcript --self-test` shows the patterns
+at work) and runs the vendored Langfuse hook (`/opt/go-jupyter/vendor/langfuse/
+langfuse_hook.py`, with `/opt/go-jupyter/.venv/bin/python`) on every mirrored
 top-level transcript that changed since the account's last clean pass. The
 hook gets a `Stop` payload, or `SessionEnd` once the transcript has been
 quiet for 30 minutes (that flushes deferred subagent turns), and keeps its

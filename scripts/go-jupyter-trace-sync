@@ -12,10 +12,16 @@
 #             (rsync, never --delete; the copy is root-owned, mode 0700). Claude
 #             Code's own transcript cleanup is pushed out to ten years by
 #             cleanupPeriodDays in /etc/claude-code/managed-settings.json.
+#   redact:   every file of the archive is mirrored into
+#             /var/lib/go-jupyter/traces/<user>/redacted/ (same layout, source
+#             mtimes kept); .jsonl files pass through go-jupyter-redact-transcript
+#             on the way, which masks credential-shaped values (barista and
+#             GitHub tokens, API keys, bearer headers, KEY=value lines). Only the
+#             mirror is ever sent anywhere; the raw archive stays on the box.
 #   forward:  only when /etc/go-jupyter/langfuse.env exists (LANGFUSE_PUBLIC_KEY,
 #             LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL; placed by cloud-init from
 #             terraform, or by hand; mode 0600). For each top-level transcript in
-#             the ARCHIVE (<slug>/<session>.jsonl, not the subagent ones under
+#             the MIRROR (<slug>/<session>.jsonl, not the subagent ones under
 #             <session>/subagents/) whose mtime is newer than the account's stamp
 #             from the previous run, the vendored Langfuse hook
 #             (vendor/langfuse/langfuse_hook.py, run with the project venv's
@@ -52,6 +58,7 @@
 #   GO_JUPYTER_LF_STATE (/var/lib/go-jupyter/langfuse-state)
 #   GO_JUPYTER_PYTHON (/opt/go-jupyter/.venv/bin/python)
 #   GO_JUPYTER_HOOK (/opt/go-jupyter/vendor/langfuse/langfuse_hook.py)
+#   GO_JUPYTER_REDACT (/usr/local/sbin/go-jupyter-redact-transcript)
 #   GO_JUPYTER_LANGFUSE_ENV (/etc/go-jupyter/langfuse.env)
 #   GO_JUPYTER_GITHUB_ALLOWLIST (/etc/jupyterhub/github_allowed_users.txt)
 #   GO_JUPYTER_LOCK (/run/go-jupyter-trace-sync.lock)
@@ -66,6 +73,7 @@ TRACE_ROOT="${GO_JUPYTER_TRACE_ROOT:-/var/lib/go-jupyter/traces}"
 LF_STATE="${GO_JUPYTER_LF_STATE:-/var/lib/go-jupyter/langfuse-state}"
 PYTHON="${GO_JUPYTER_PYTHON:-/opt/go-jupyter/.venv/bin/python}"
 HOOK="${GO_JUPYTER_HOOK:-/opt/go-jupyter/vendor/langfuse/langfuse_hook.py}"
+REDACT="${GO_JUPYTER_REDACT:-/usr/local/sbin/go-jupyter-redact-transcript}"
 LF_ENV="${GO_JUPYTER_LANGFUSE_ENV:-/etc/go-jupyter/langfuse.env}"
 ALLOWLIST="${GO_JUPYTER_GITHUB_ALLOWLIST:-/etc/jupyterhub/github_allowed_users.txt}"
 LOCK="${GO_JUPYTER_LOCK:-/run/go-jupyter-trace-sync.lock}"
@@ -162,6 +170,7 @@ for user in "${TARGETS[@]}"; do
     if [ -z "$home" ] || [ ! -d "$src" ]; then echo "  skip $user: no $src"; continue; fi
     accounts=$((accounts + 1))
     arch="$TRACE_ROOT/$user"
+    user_failed=0
 
     # 1. Archive. Owner/group are not preserved: the copy is root's. -i prints
     #    one line per transferred file (also under -n); the top-level transcripts
@@ -172,11 +181,31 @@ for user in "${TARGETS[@]}"; do
     archived=$((archived + n))
     [ "$DRY" -eq 0 ] || echo "  $user: would archive $n transcript(s) to $arch/projects/"
 
-    # 2. Forward what changed since this account's last completed pass.
+    # 2. Redacted mirror: every archive file not yet mirrored, or changed since,
+    #    goes to <arch>/redacted/ with the source mtime kept; .jsonl through the
+    #    redactor, anything else (subagent .meta.json) copied. Nothing else is
+    #    ever forwarded. A redaction failure skips that file and counts.
     [ "$FORWARD" -eq 1 ] || continue
     if [ ! -d "$arch/projects" ]; then
         echo "  $user: no archive yet; a real run archives first, then forwards all of it"
         continue
+    fi
+    mirror="$arch/redacted"
+    if [ "$DRY" -eq 0 ]; then
+        install -d -m 0700 "$mirror"
+        while IFS= read -r -d '' src_f; do
+            rel="${src_f#"$arch/projects/"}"; dst_f="$mirror/$rel"
+            if [ -e "$dst_f" ] && [ ! "$src_f" -nt "$dst_f" ]; then continue; fi
+            install -d -m 0700 "$(dirname "$dst_f")"
+            case "$src_f" in
+                *.jsonl) if ! "$PYTHON" -I "$REDACT" "$src_f" "$dst_f.tmp" 9>&-; then
+                             failures=$((failures + 1)); user_failed=1
+                             log "redaction failed for $user $rel"; command rm -f "$dst_f.tmp"; continue
+                         fi ;;
+                *)       command cp -f "$src_f" "$dst_f.tmp" ;;
+            esac
+            touch -r "$src_f" "$dst_f.tmp" && command mv -f "$dst_f.tmp" "$dst_f"
+        done < <(find "$arch/projects" -type f -print0)
     fi
     if grep -qixF -- "$user" "$ALLOWLIST" 2>/dev/null; then
         lf_user="github:$user"
@@ -187,7 +216,10 @@ for user in "${TARGETS[@]}"; do
     seen="$LF_STATE/seen/$user"
     [ "$DRY" -eq 1 ] || install -d -m 0700 "$seen"
     now="$(date +%s)"
-    user_failed=0
+    # Pass start, at full timestamp precision: becomes the stamp if the pass
+    # ends clean. A whole-second stamp lost a sub-second race once in testing.
+    [ "$DRY" -eq 1 ] || touch "$stamp.new"
+    scan="$mirror"; [ -d "$scan" ] || scan="$arch/projects"
     while IFS= read -r -d '' f; do
         case "$f" in *'"'* | *\\*) echo "  skip $f: quote or backslash in path"; continue ;; esac
         sid="$(basename "$f" .jsonl)"
@@ -209,11 +241,11 @@ for user in "${TARGETS[@]}"; do
             [ "$rc" -eq 124 ] && why="timeout after ${HOOK_TIMEOUT}s" || why="exit $rc"
             log "hook failed for $user $(basename "$f") ($ev): $why"
         fi
-    done < <(find "$arch/projects" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' -print0)
+    done < <(find "$scan" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' -print0)
     # The stamp marks the start of this pass; set it only when every hook ran
     # clean, so a failed transcript is retried next tick.
-    if [ "$DRY" -eq 0 ] && [ "$user_failed" -eq 0 ]; then
-        touch -d "@$now" "$stamp"
+    if [ "$DRY" -eq 0 ]; then
+        if [ "$user_failed" -eq 0 ]; then command mv -f "$stamp.new" "$stamp"; else command rm -f "$stamp.new"; fi
     fi
 done
 

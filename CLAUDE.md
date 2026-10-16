@@ -70,7 +70,7 @@ this file for the operating rules.
   in `/usr/local/sbin`, the systemd units, `/etc/claude-code/managed-settings.json`,
   `/etc/gitconfig` (from `etc/gitconfig`), `/etc/jupyterhub/jupyterhub.env`
   (including the generated `JUPYTERHUB_CRYPT_KEY`), `/etc/default/go-jupyter`
-  (backend and `GO_JUPYTER_ALLOWLIST_AUTHORIZATION`), `go-jupyter-trace-sync`
+  (backend and `GO_JUPYTER_ALLOWLIST_AUTHORIZATION`), `go-jupyter-trace-sync` and `go-jupyter-redact-transcript`
   with its service and timer, `/etc/go-jupyter/langfuse.env` (from
   `langfuse_env_path`; placed by hand on a running box) and the
   `cleanupPeriodDays` key in the managed settings (#28), the system tools the skills call (`runoak` under `/opt/uv-tools`, obo-scripts under

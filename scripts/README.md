@@ -105,9 +105,13 @@ own per-transcript offsets under `/var/lib/go-jupyter/langfuse-state`, so a
 rerun sends nothing twice. The env file is sourced in a subshell around the
 hook only. A hook that exits non-zero or runs past 120 s is logged, the run
 goes on, and that account's stamp is not advanced, so the next tick retries.
-The hook itself exits 0 when Langfuse is unreachable (the SDK reports the
-failed export on stderr, which the journal shows), so a wrong key or URL
-shows up in `journalctl -u go-jupyter-trace-sync`, not in the failure count.
+The hook itself exits 0 when Langfuse is unreachable and still advances its
+offset, so the script checks first: one authenticated request per run, and
+on failure it archives only, forwards nothing and exits 1 (`journalctl -t
+go-jupyter-trace-sync` says "not reachable"). Trace ids come from the
+session id and turn number (`CC_LANGFUSE_TRACE_SEED`), so clearing the hook's
+state and re-running re-sends into the same traces. A transcript never
+forwarded before is forwarded whatever its mtime (`seen/<user>/` markers).
 
 ```sh
 sudo go-jupyter-trace-sync --dry-run          # what would be archived and forwarded

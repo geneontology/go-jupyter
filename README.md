@@ -200,10 +200,17 @@ cloud-init (never committed, never in the repo's history):
   transcript under `/var/lib/go-jupyter/langfuse-state`, so nothing is sent
   twice. Nothing runs inside a session and no key is in a session's
   environment: the script sources the env file in a subshell around the hook.
-  The hook is fail-open: when Langfuse cannot be reached or rejects the keys
-  it reports the export failure on stderr (the unit's journal) and still
-  exits 0, so the run counts the transcript as forwarded and those turns are
-  not re-sent; after placing or changing the env file, check the journal.
+  The hook is fail-open (an export it cannot deliver is reported on stderr
+  and its offset still advances), so each run first makes one authenticated
+  request to Langfuse and, if that fails, archives only, forwards nothing,
+  and exits 1 so the unit shows it; a wrong key or URL therefore stops
+  forwarding rather than losing turns. Trace ids are derived from the session
+  id and turn number, so a deliberate re-send (delete the account's entries
+  from `langfuse_state.json` under the state directory, or the whole
+  file) overwrites the same traces instead of duplicating them. A transcript
+  that has never been forwarded (no marker under the state directory's
+  `seen/<user>/`) is forwarded whatever its mtime, so homes brought in by
+  `go-jupyter-migrate` are not skipped.
   Verify with `systemctl list-timers 'go-jupyter-trace-sync*'`,
   `journalctl -t go-jupyter-trace-sync` (one summary line per run:
   accounts, transcripts archived, forwarded, failures) and

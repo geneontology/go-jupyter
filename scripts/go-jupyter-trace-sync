@@ -28,10 +28,20 @@
 #             User id: github:<login> when the account is in the hub's GitHub
 #             allowlist, else local:<host>:<user>. Tag: box:<host>.
 #
-# A hook failure (non-zero exit, or the 120 s timeout) is logged and the run
-# continues; that account's stamp is not advanced, so its recent transcripts
-# are retried on the next tick (cheap: the hook's offsets make a retry a no-op).
-# Overlapping runs skip (flock). The hook's own log is
+# The hook is fail-open: when Langfuse cannot be reached it still exits 0 and
+# advances its offset, and those turns are not re-sent. So before any hook
+# runs, one authenticated request checks that Langfuse answers; if it does
+# not, forwarding is skipped for the whole run (nothing advances, the archive
+# still happens, the run exits 1 so the unit shows it). A hook failure
+# (non-zero exit, or the 120 s timeout) is logged and the run continues; that
+# account's stamp is not advanced, so its recent transcripts are retried on
+# the next tick (cheap: the hook's offsets make a retry a no-op). Each
+# transcript's trace ids are derived from its session id
+# (CC_LANGFUSE_TRACE_SEED), so a deliberate re-send after clearing the hook's
+# state overwrites the same traces instead of duplicating them. A transcript
+# that has never been forwarded (no marker under <state dir>/seen/) is
+# forwarded whatever its mtime, which covers homes copied in by
+# go-jupyter-migrate. Overlapping runs skip (flock). The hook's own log is
 # <state dir>/langfuse_hook.log; this script reads only its exit status.
 #
 # Usage: go-jupyter-trace-sync [--all | --user <name>] [--dry-run]
@@ -111,7 +121,25 @@ if [ ! -r "$LF_ENV" ]; then
     log "forwarding off: no readable $LF_ENV (archive only)"
 fi
 if [ "$DRY" -eq 0 ]; then
-    install -d -m 0700 "$TRACE_ROOT" "$LF_STATE" "$LF_STATE/stamps"
+    install -d -m 0700 "$TRACE_ROOT" "$LF_STATE" "$LF_STATE/stamps" "$LF_STATE/seen"
+fi
+
+# langfuse_reachable: one authenticated GET in a subshell that sources the env
+# file; true when Langfuse answers 2xx. Keys never leave the subshell.
+langfuse_reachable() {
+    (
+        set -a
+        # shellcheck disable=SC1090
+        . "$LF_ENV"
+        set +a
+        [ -n "${LANGFUSE_PUBLIC_KEY:-}" ] && [ -n "${LANGFUSE_SECRET_KEY:-}" ] && [ -n "${LANGFUSE_BASE_URL:-}" ] || exit 1
+        curl -sf -m 15 -o /dev/null -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" "${LANGFUSE_BASE_URL%/}/api/public/projects"
+    ) 9>&-
+}
+UNREACHABLE=0
+if [ "$FORWARD" -eq 1 ] && [ "$DRY" -eq 0 ] && ! langfuse_reachable; then
+    FORWARD=0; UNREACHABLE=1
+    log "Langfuse not reachable with the keys in $LF_ENV; forwarding skipped this run (archive only)"
 fi
 
 # forward_one <user id> <payload>: ALWAYS called in a subshell, so the env
@@ -122,7 +150,8 @@ forward_one() {
     . "$LF_ENV"
     set +a
     export LANGFUSE_USER_ID="$1" CC_LANGFUSE_STATE_DIR="$LF_STATE" \
-        CC_LANGFUSE_TRACE_TAGS="box:$HOST" CC_LANGFUSE_CAPTURE_IMAGES=false
+        CC_LANGFUSE_TRACE_TAGS="box:$HOST" CC_LANGFUSE_CAPTURE_IMAGES=false \
+        CC_LANGFUSE_TRACE_SEED="$3"
     printf '%s' "$2" | timeout "$HOOK_TIMEOUT" "$PYTHON" "$HOOK" >/dev/null 9>&-
 }
 
@@ -155,14 +184,16 @@ for user in "${TARGETS[@]}"; do
         lf_user="local:$HOST:$user"
     fi
     stamp="$LF_STATE/stamps/$user"
-    newer=()
-    [ ! -e "$stamp" ] || newer=(-newer "$stamp")
+    seen="$LF_STATE/seen/$user"
+    [ "$DRY" -eq 1 ] || install -d -m 0700 "$seen"
     now="$(date +%s)"
     user_failed=0
     while IFS= read -r -d '' f; do
         case "$f" in *'"'* | *\\*) echo "  skip $f: quote or backslash in path"; continue ;; esac
-        if [ $((now - $(stat -c %Y "$f"))) -gt "$QUIET_SECS" ]; then ev=SessionEnd; else ev=Stop; fi
         sid="$(basename "$f" .jsonl)"
+        # Forward when changed since the account's last clean pass, or never forwarded.
+        if [ -e "$stamp" ] && [ -e "$seen/$sid" ] && [ ! "$f" -nt "$stamp" ]; then continue; fi
+        if [ $((now - $(stat -c %Y "$f"))) -gt "$QUIET_SECS" ]; then ev=SessionEnd; else ev=Stop; fi
         if [ "$DRY" -eq 1 ]; then
             echo "  $user: would forward $f event=$ev user_id=$lf_user"
             continue
@@ -170,15 +201,15 @@ for user in "${TARGETS[@]}"; do
         payload="$(printf '{"session_id":"%s","transcript_path":"%s","hook_event_name":"%s","reason":"other"}' \
             "$sid" "$f" "$ev")"
         rc=0
-        ( forward_one "$lf_user" "$payload" ) || rc=$?
+        ( forward_one "$lf_user" "$payload" "$sid" ) || rc=$?
         if [ "$rc" -eq 0 ]; then
-            forwarded=$((forwarded + 1))
+            forwarded=$((forwarded + 1)); touch "$seen/$sid"
         else
             failures=$((failures + 1)); user_failed=1
             [ "$rc" -eq 124 ] && why="timeout after ${HOOK_TIMEOUT}s" || why="exit $rc"
             log "hook failed for $user $(basename "$f") ($ev): $why"
         fi
-    done < <(find "$arch/projects" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' "${newer[@]}" -print0)
+    done < <(find "$arch/projects" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' -print0)
     # The stamp marks the start of this pass; set it only when every hook ran
     # clean, so a failed transcript is retried next tick.
     if [ "$DRY" -eq 0 ] && [ "$user_failed" -eq 0 ]; then
@@ -188,4 +219,4 @@ done
 
 [ "$DRY" -eq 0 ] || echo "dry-run: nothing was written and no hook was run."
 log "run done: accounts=$accounts archived=$archived forwarded=$forwarded failures=$failures forwarding=$([ "$FORWARD" -eq 1 ] && echo on || echo off)${DRYFLAG:+ dry-run}"
-[ "$failures" -eq 0 ]
+[ "$failures" -eq 0 ] && [ "$UNREACHABLE" -eq 0 ]

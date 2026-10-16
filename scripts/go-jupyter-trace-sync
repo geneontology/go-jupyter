@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+#
+# go-jupyter-trace-sync — archive every curator's Claude Code transcripts and
+# forward completed turns to Langfuse (#28).
+#
+# Runs as root on a systemd timer (~5 min). Nothing runs inside a curator's
+# session and no Langfuse key is ever in a session's environment. Per seeded
+# account (UID >= 1000, not ubuntu/nobody, ~/.seeded present; the same set
+# go-jupyter-refresh-user --all acts on):
+#
+#   archive:  ~/.claude/projects/ -> /var/lib/go-jupyter/traces/<user>/projects/
+#             (rsync, never --delete; the copy is root-owned, mode 0700). Claude
+#             Code's own transcript cleanup is pushed out to ten years by
+#             cleanupPeriodDays in /etc/claude-code/managed-settings.json.
+#   forward:  only when /etc/go-jupyter/langfuse.env exists (LANGFUSE_PUBLIC_KEY,
+#             LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL; placed by cloud-init from
+#             terraform, or by hand; mode 0600). For each top-level transcript in
+#             the ARCHIVE (<slug>/<session>.jsonl, not the subagent ones under
+#             <session>/subagents/) whose mtime is newer than the account's stamp
+#             from the previous run, the vendored Langfuse hook
+#             (vendor/langfuse/langfuse_hook.py, run with the project venv's
+#             python) gets the Stop-style payload on stdin, or SessionEnd when the
+#             transcript has been quiet for 30 minutes (that also flushes deferred
+#             subagent turns). The hook keeps a byte offset per transcript under
+#             /var/lib/go-jupyter/langfuse-state, so a rerun emits nothing new.
+#             The env file is sourced in a subshell: the keys reach the hook and
+#             nothing else, not this process, not the log.
+#             User id: github:<login> when the account is in the hub's GitHub
+#             allowlist, else local:<host>:<user>. Tag: box:<host>.
+#
+# A hook failure (non-zero exit, or the 120 s timeout) is logged and the run
+# continues; that account's stamp is not advanced, so its recent transcripts
+# are retried on the next tick (cheap: the hook's offsets make a retry a no-op).
+# Overlapping runs skip (flock). The hook's own log is
+# <state dir>/langfuse_hook.log; this script reads only its exit status.
+#
+# Usage: go-jupyter-trace-sync [--all | --user <name>] [--dry-run]
+#   --dry-run   print what would be archived (rsync -n) and forwarded; run no hook
+#
+# Environment overrides, for running it elsewhere than the box:
+#   GO_JUPYTER_HOME_ROOT (/home)   GO_JUPYTER_TRACE_ROOT (/var/lib/go-jupyter/traces)
+#   GO_JUPYTER_LF_STATE (/var/lib/go-jupyter/langfuse-state)
+#   GO_JUPYTER_PYTHON (/opt/go-jupyter/.venv/bin/python)
+#   GO_JUPYTER_HOOK (/opt/go-jupyter/vendor/langfuse/langfuse_hook.py)
+#   GO_JUPYTER_LANGFUSE_ENV (/etc/go-jupyter/langfuse.env)
+#   GO_JUPYTER_GITHUB_ALLOWLIST (/etc/jupyterhub/github_allowed_users.txt)
+#   GO_JUPYTER_LOCK (/run/go-jupyter-trace-sync.lock)
+#   GO_JUPYTER_ACCOUNTS: space-separated account names with homes under
+#       GO_JUPYTER_HOME_ROOT/<name>; bypasses getent and lifts the root
+#       requirement, for a local test against directories you own.
+#
+set -euo pipefail
+
+HOME_ROOT="${GO_JUPYTER_HOME_ROOT:-/home}"
+TRACE_ROOT="${GO_JUPYTER_TRACE_ROOT:-/var/lib/go-jupyter/traces}"
+LF_STATE="${GO_JUPYTER_LF_STATE:-/var/lib/go-jupyter/langfuse-state}"
+PYTHON="${GO_JUPYTER_PYTHON:-/opt/go-jupyter/.venv/bin/python}"
+HOOK="${GO_JUPYTER_HOOK:-/opt/go-jupyter/vendor/langfuse/langfuse_hook.py}"
+LF_ENV="${GO_JUPYTER_LANGFUSE_ENV:-/etc/go-jupyter/langfuse.env}"
+ALLOWLIST="${GO_JUPYTER_GITHUB_ALLOWLIST:-/etc/jupyterhub/github_allowed_users.txt}"
+LOCK="${GO_JUPYTER_LOCK:-/run/go-jupyter-trace-sync.lock}"
+ACCOUNTS="${GO_JUPYTER_ACCOUNTS:-}"
+HOOK_TIMEOUT=120
+QUIET_SECS=1800   # a transcript untouched this long gets SessionEnd, else Stop
+
+log() { logger -t go-jupyter-trace-sync -- "$*"; echo "$*"; }
+usage() { echo "usage: sudo go-jupyter-trace-sync [--all | --user <name>] [--dry-run]" >&2; exit 2; }
+
+TARGETS=()
+DRY=0
+DRYFLAG=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --all)      ;;
+        --user)     [ -n "${2:-}" ] || usage; TARGETS+=("$2"); shift ;;
+        --dry-run)  DRY=1; DRYFLAG=--dry-run ;;
+        -h|--help)  usage ;;
+        *)          echo "unknown option: $1" >&2; usage ;;
+    esac
+    shift
+done
+if [ "$(id -u)" -ne 0 ] && [ -z "$ACCOUNTS" ]; then
+    echo "must run as root (try: sudo $0 $*)" >&2
+    exit 1
+fi
+
+# home_of <user>: the account's home, or nothing.
+home_of() {
+    if [ -n "$ACCOUNTS" ]; then echo "$HOME_ROOT/$1"; return; fi
+    getent passwd "$1" | cut -d: -f6 || true
+}
+if [ ${#TARGETS[@]} -eq 0 ]; then
+    if [ -n "$ACCOUNTS" ]; then
+        read -r -a TARGETS <<<"$ACCOUNTS"
+    else
+        while IFS=: read -r name _ uid _ _ home _; do
+            [ "${uid:-0}" -ge 1000 ] 2>/dev/null || continue
+            case "$name" in ubuntu | nobody) continue ;; esac
+            [ -f "$home/.seeded" ] && TARGETS+=("$name")
+        done < <(getent passwd)
+    fi
+fi
+
+exec 9>"$LOCK"
+flock -n 9 || { log "another run holds $LOCK; skipping"; exit 0; }
+
+HOST="$(hostname -s)"
+FORWARD=1
+if [ ! -r "$LF_ENV" ]; then
+    FORWARD=0
+    log "forwarding off: no readable $LF_ENV (archive only)"
+fi
+if [ "$DRY" -eq 0 ]; then
+    install -d -m 0700 "$TRACE_ROOT" "$LF_STATE" "$LF_STATE/stamps"
+fi
+
+# forward_one <user id> <payload>: ALWAYS called in a subshell, so the env
+# file's keys die with it. Exit status is the hook's (124: timeout).
+forward_one() {
+    set -a
+    # shellcheck disable=SC1090
+    . "$LF_ENV"
+    set +a
+    export LANGFUSE_USER_ID="$1" CC_LANGFUSE_STATE_DIR="$LF_STATE" \
+        CC_LANGFUSE_TRACE_TAGS="box:$HOST" CC_LANGFUSE_CAPTURE_IMAGES=false
+    printf '%s' "$2" | timeout "$HOOK_TIMEOUT" "$PYTHON" "$HOOK" >/dev/null 9>&-
+}
+
+accounts=0; archived=0; forwarded=0; failures=0
+for user in "${TARGETS[@]}"; do
+    home="$(home_of "$user")"
+    src="$home/.claude/projects"
+    if [ -z "$home" ] || [ ! -d "$src" ]; then echo "  skip $user: no $src"; continue; fi
+    accounts=$((accounts + 1))
+    arch="$TRACE_ROOT/$user"
+
+    # 1. Archive. Owner/group are not preserved: the copy is root's. -i prints
+    #    one line per transferred file (also under -n); the top-level transcripts
+    #    (<slug>/<session>.jsonl) among them are counted below.
+    [ "$DRY" -eq 1 ] || install -d -m 0700 "$arch" "$arch/projects"
+    n="$(rsync -a --no-owner --no-group -i $DRYFLAG "$src/" "$arch/projects/" \
+        | { grep -cE '^>f[^ ]* [^/]+/[^/]+\.jsonl$' || true; })"
+    archived=$((archived + n))
+    [ "$DRY" -eq 0 ] || echo "  $user: would archive $n transcript(s) to $arch/projects/"
+
+    # 2. Forward what changed since this account's last completed pass.
+    [ "$FORWARD" -eq 1 ] || continue
+    if [ ! -d "$arch/projects" ]; then
+        echo "  $user: no archive yet; a real run archives first, then forwards all of it"
+        continue
+    fi
+    if grep -qixF -- "$user" "$ALLOWLIST" 2>/dev/null; then
+        lf_user="github:$user"
+    else
+        lf_user="local:$HOST:$user"
+    fi
+    stamp="$LF_STATE/stamps/$user"
+    newer=()
+    [ ! -e "$stamp" ] || newer=(-newer "$stamp")
+    now="$(date +%s)"
+    user_failed=0
+    while IFS= read -r -d '' f; do
+        case "$f" in *'"'* | *\\*) echo "  skip $f: quote or backslash in path"; continue ;; esac
+        if [ $((now - $(stat -c %Y "$f"))) -gt "$QUIET_SECS" ]; then ev=SessionEnd; else ev=Stop; fi
+        sid="$(basename "$f" .jsonl)"
+        if [ "$DRY" -eq 1 ]; then
+            echo "  $user: would forward $f event=$ev user_id=$lf_user"
+            continue
+        fi
+        payload="$(printf '{"session_id":"%s","transcript_path":"%s","hook_event_name":"%s","reason":"other"}' \
+            "$sid" "$f" "$ev")"
+        rc=0
+        ( forward_one "$lf_user" "$payload" ) || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            forwarded=$((forwarded + 1))
+        else
+            failures=$((failures + 1)); user_failed=1
+            [ "$rc" -eq 124 ] && why="timeout after ${HOOK_TIMEOUT}s" || why="exit $rc"
+            log "hook failed for $user $(basename "$f") ($ev): $why"
+        fi
+    done < <(find "$arch/projects" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' "${newer[@]}" -print0)
+    # The stamp marks the start of this pass; set it only when every hook ran
+    # clean, so a failed transcript is retried next tick.
+    if [ "$DRY" -eq 0 ] && [ "$user_failed" -eq 0 ]; then
+        touch -d "@$now" "$stamp"
+    fi
+done
+
+[ "$DRY" -eq 0 ] || echo "dry-run: nothing was written and no hook was run."
+log "run done: accounts=$accounts archived=$archived forwarded=$forwarded failures=$failures forwarding=$([ "$FORWARD" -eq 1 ] && echo on || echo off)${DRYFLAG:+ dry-run}"
+[ "$failures" -eq 0 ]

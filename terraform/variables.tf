@@ -127,6 +127,12 @@ variable "anthropic_api_key_path" {
   default     = ""
 }
 
+variable "langfuse_env_path" {
+  description = "Path on the operator's machine to an env file holding LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL, for forwarding curator session traces to Langfuse (#28). Read at plan time via file() and baked into user_data; never committed. Cloud-init writes the contents to /etc/go-jupyter/langfuse.env (mode 0600), which go-jupyter-trace-sync sources around each hook run. Leave empty to archive transcripts on the box without forwarding; the file can also be placed by hand on a running box."
+  type        = string
+  default     = ""
+}
+
 variable "local_users" {
   description = "Out-of-band local accounts created on the box at boot for the PAM (Tier B) authenticator. Each entry is created via useradd + chpasswd and added to /etc/jupyterhub/local_users.txt so PAMAuthenticator allows it; the home is seeded on first login by the spawner from the user's chosen starter template. Operators can also add users at runtime via `sudo go-jupyter-add-user <name>`. Sensitive: lives in terraform.tfvars (gitignored), terraform.tfstate, and the rendered user_data. Leave as [] to deploy with no OOB accounts."
   type = list(object({

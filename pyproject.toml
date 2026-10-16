@@ -16,4 +16,7 @@ dependencies = [
     # MultiAuthenticator (requires a registered GitHub OAuth App).
     "oauthenticator>=17.0",
     "jupyterhub-systemdspawner>=1.0",
+    # The vendored Langfuse hook (vendor/langfuse/langfuse_hook.py, run by
+    # go-jupyter-trace-sync with this venv's python) declares this range.
+    "langfuse>=4.7,<5",
 ]

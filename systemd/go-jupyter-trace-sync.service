@@ -1,0 +1,15 @@
+[Unit]
+Description=go-jupyter: archive curator transcripts and forward turns to Langfuse
+Documentation=https://github.com/geneontology/go-jupyter/issues/28
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The script sources /etc/go-jupyter/langfuse.env itself, in a subshell around
+# the hook, so the keys are never in this unit's environment; no EnvironmentFile.
+ExecStart=/usr/local/sbin/go-jupyter-trace-sync
+# Best-effort: a run with a failed hook exits 1 (visible in `systemctl status`)
+# and the next tick retries that account's recent transcripts.
+Nice=10
+IOSchedulingClass=idle

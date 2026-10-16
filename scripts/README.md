@@ -88,6 +88,44 @@ journalctl -t go-jupyter-update-claude      # decisions
 cat /var/log/go-jupyter-claude-updates.log  # applied updates
 ```
 
+## go-jupyter-trace-sync — transcript archive and Langfuse forwarding
+
+Installed to `/usr/local/sbin` by cloud-init and run every five minutes by
+`go-jupyter-trace-sync.timer`, as root
+([#28](https://github.com/geneontology/go-jupyter/issues/28)). For each
+seeded account (the same set `go-jupyter-refresh-user --all` acts on) it
+rsyncs `~/.claude/projects/` into `/var/lib/go-jupyter/traces/<user>/projects/`
+(root-only, never deleted from), and, when `/etc/go-jupyter/langfuse.env` is
+present, runs the vendored Langfuse hook (`/opt/go-jupyter/vendor/langfuse/
+langfuse_hook.py`, with `/opt/go-jupyter/.venv/bin/python`) on every archived
+top-level transcript that changed since the account's last clean pass. The
+hook gets a `Stop` payload, or `SessionEnd` once the transcript has been
+quiet for 30 minutes (that flushes deferred subagent turns), and keeps its
+own per-transcript offsets under `/var/lib/go-jupyter/langfuse-state`, so a
+rerun sends nothing twice. The env file is sourced in a subshell around the
+hook only. A hook that exits non-zero or runs past 120 s is logged, the run
+goes on, and that account's stamp is not advanced, so the next tick retries.
+The hook itself exits 0 when Langfuse is unreachable (the SDK reports the
+failed export on stderr, which the journal shows), so a wrong key or URL
+shows up in `journalctl -u go-jupyter-trace-sync`, not in the failure count.
+
+```sh
+sudo go-jupyter-trace-sync --dry-run          # what would be archived and forwarded
+sudo go-jupyter-trace-sync --user <name>      # one account now
+sudo go-jupyter-trace-sync                    # all accounts now (what the timer runs)
+journalctl -t go-jupyter-trace-sync           # one summary line per run
+journalctl -u go-jupyter-trace-sync           # the same plus the hook's stderr
+ls /var/lib/go-jupyter/traces                 # one directory per account
+cat /var/lib/go-jupyter/langfuse-state/langfuse_hook.log   # the hook's own log
+```
+
+To run it elsewhere than the box (a laptop test against directories you
+own), set `GO_JUPYTER_ACCOUNTS="<name> ..."`, which bypasses `getent` and the
+root check, with `GO_JUPYTER_HOME_ROOT`, `GO_JUPYTER_TRACE_ROOT`,
+`GO_JUPYTER_LF_STATE`, `GO_JUPYTER_PYTHON`, `GO_JUPYTER_HOOK`,
+`GO_JUPYTER_LANGFUSE_ENV`, `GO_JUPYTER_GITHUB_ALLOWLIST` and
+`GO_JUPYTER_LOCK` pointing at your own paths (see the script header).
+
 ## go-jupyter-git-identity — commit identity from the GitHub profile
 
 `sudo go-jupyter-git-identity <user>` (or `--all`, `--dry-run`) sets `user.name`

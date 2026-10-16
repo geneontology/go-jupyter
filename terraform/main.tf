@@ -195,6 +195,7 @@ resource "aws_instance" "this" {
     local_users                = var.local_users
     github_oauth_client_id     = var.github_oauth_client_id
     github_oauth_client_secret = var.github_oauth_client_secret
+    allowlist_authorization    = var.allowlist_authorization
   }))
 
   # Re-run user_data when its inputs change. Changing git_ref / tokens /

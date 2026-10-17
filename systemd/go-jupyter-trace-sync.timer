@@ -1,0 +1,16 @@
+[Unit]
+Description=go-jupyter: periodically archive transcripts and forward turns to Langfuse
+Documentation=https://github.com/geneontology/go-jupyter/issues/28
+
+[Timer]
+# First run shortly after boot, then every 5 minutes after the previous run
+# ended. A tick is one rsync per account, a redaction pass over changed files,
+# one hook process per transcript whose mtime or size changed, and one request
+# per transcript forwarded last tick (the delivery check). Overlapping runs
+# skip on the script's lock. (Persistent= would do nothing here: it applies
+# to OnCalendar= timers only.)
+OnBootSec=10min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

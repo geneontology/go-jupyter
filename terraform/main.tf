@@ -189,12 +189,14 @@ resource "aws_instance" "this" {
     anthropic_api_key          = var.anthropic_api_key_path != "" ? trimspace(file(var.anthropic_api_key_path)) : ""
     gcp_credentials_json       = var.gcp_credentials_json_path != "" ? file(var.gcp_credentials_json_path) : ""
     deploy_key_private         = var.deploy_key_private_path != "" ? file(var.deploy_key_private_path) : ""
+    langfuse_env               = var.langfuse_env_path != "" ? trimspace(file(var.langfuse_env_path)) : ""
     hostname                   = local.hostname
     wildcard_cert_s3_uri       = var.wildcard_cert_s3_uri
     cert_domain                = local.cert_domain
     local_users                = var.local_users
     github_oauth_client_id     = var.github_oauth_client_id
     github_oauth_client_secret = var.github_oauth_client_secret
+    allowlist_authorization    = var.allowlist_authorization
   }))
 
   # Re-run user_data when its inputs change. Changing git_ref / tokens /

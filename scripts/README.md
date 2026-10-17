@@ -88,6 +88,82 @@ journalctl -t go-jupyter-update-claude      # decisions
 cat /var/log/go-jupyter-claude-updates.log  # applied updates
 ```
 
+## go-jupyter-trace-sync — transcript archive, redaction and Langfuse forwarding
+
+Installed to `/usr/local/sbin` by cloud-init and run every five minutes by
+`go-jupyter-trace-sync.timer`, as root
+([#28](https://github.com/geneontology/go-jupyter/issues/28)). For each
+seeded account (the same set `go-jupyter-refresh-user --all` acts on) it
+rsyncs `~/.claude/projects/` into `/var/lib/go-jupyter/traces/<user>/projects/`
+(root-only, never deleted from; an account whose `~/.claude` or
+`~/.claude/projects` is a symlink is skipped), mirrors the archive into
+`.../<user>/redacted/` through `go-jupyter-redact-transcript` (credential
+values masked, source mtimes kept; `go-jupyter-redact-transcript --self-test`
+shows the patterns at work), and, when `/etc/go-jupyter/langfuse.env` is
+present and Langfuse answers an authenticated request, runs the vendored
+Langfuse hook (`/opt/go-jupyter/vendor/langfuse/langfuse_hook.py`, with
+`/opt/go-jupyter/.venv/bin/python`) on every mirrored top-level transcript
+whose mtime or size changed since its last successful run, with a `Stop`
+payload, or once with `SessionEnd` after a day of quiet. Per-transcript
+records live under `/var/lib/go-jupyter/langfuse-state/state/<user>/`; the
+hook's own offsets in `langfuse_state.json` next to them. A hook run that
+exits non-zero, runs past 120 s or writes to stderr is a failure: logged,
+not recorded, stderr kept in `langfuse-state/hook-stderr.log`. The tick
+after a successful run asks Langfuse for the last turn's trace once; a miss
+is logged and written under `langfuse-state/failed/<user>/<session>`.
+
+```sh
+sudo go-jupyter-trace-sync --dry-run          # what would be archived and forwarded
+sudo go-jupyter-trace-sync --user <name>      # one account now
+sudo go-jupyter-trace-sync                    # all accounts now (what the timer runs)
+journalctl -t go-jupyter-trace-sync           # one summary line per run
+ls /var/lib/go-jupyter/traces                 # one directory per account
+ls /var/lib/go-jupyter/langfuse-state/failed/*/   # transcripts with a delivery problem
+cat /var/lib/go-jupyter/langfuse-state/langfuse_hook.log   # the hook's own log
+```
+
+### Deploying on a running box
+
+The helper, the units and the env file are first-boot items that
+`go-jupyter-update` does not install (and `go-jupyter-update` restarts the
+hub, which this does not need):
+
+```sh
+sudo git -C /opt/go-jupyter pull --ff-only
+sudo /usr/local/bin/uv sync --project /opt/go-jupyter          # adds langfuse to the hub venv
+sudo install -m 0755 /opt/go-jupyter/scripts/go-jupyter-trace-sync /opt/go-jupyter/scripts/go-jupyter-redact-transcript /usr/local/sbin/
+sudo install -m 0644 /opt/go-jupyter/systemd/go-jupyter-trace-sync.service /opt/go-jupyter/systemd/go-jupyter-trace-sync.timer /etc/systemd/system/
+sudo install -d -m 0700 /var/lib/go-jupyter/traces /var/lib/go-jupyter/langfuse-state
+sudo install -m 0600 <the operator's langfuse env file> /etc/go-jupyter/langfuse.env
+# add "cleanupPeriodDays": 3650 to /etc/claude-code/managed-settings.json
+sudo go-jupyter-trace-sync --dry-run
+sudo go-jupyter-trace-sync --user <one account>              # then check the Langfuse project
+sudo systemctl daemon-reload && sudo systemctl enable --now go-jupyter-trace-sync.timer
+```
+
+The first run on a box with history forwards every transcript of every
+account; do it account by account with `--user` and watch the Langfuse
+project before enabling the timer.
+
+### Re-sending
+
+The hook will not re-read a transcript it has advanced past, and a re-send
+into an existing trace adds observations rather than replacing them (trace
+ids are deterministic, span ids are not). To re-send one session: delete its
+traces in Langfuse (UI, or `DELETE /api/public/traces/<id>` for each turn's
+id, `sha256("<session>:<turn>")[:32]`), remove the hook's entry for that
+transcript from `langfuse_state.json` (its key is `sha256("<session>::<mirror
+path>")`) or the whole file for everything, remove
+`langfuse-state/state/<user>/<session>`, and let the next tick run.
+
+To run it elsewhere than the box (a laptop test against directories you
+own), set `GO_JUPYTER_ACCOUNTS="<name> ..."`, which bypasses `getent` and the
+root check, with `GO_JUPYTER_HOME_ROOT`, `GO_JUPYTER_TRACE_ROOT`,
+`GO_JUPYTER_LF_STATE`, `GO_JUPYTER_PYTHON`, `GO_JUPYTER_HOOK`,
+`GO_JUPYTER_REDACT`, `GO_JUPYTER_LANGFUSE_ENV`, `GO_JUPYTER_GITHUB_ALLOWLIST`,
+`GO_JUPYTER_LOCK` and `GO_JUPYTER_QUIET_SECS` pointing at your own paths (see
+the script header).
+
 ## go-jupyter-git-identity — commit identity from the GitHub profile
 
 `sudo go-jupyter-git-identity <user>` (or `--all`, `--dry-run`) sets `user.name`

@@ -57,6 +57,12 @@ anthropic_api_key_path = ""
 gcp_credentials_json_path = ""
 # gcp_credentials_json_path = "/home/you/.secrets/vertex-sa-key.json"
 
+# Optional: forward curator session traces to Langfuse (#28). Path to an env
+# file with LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL;
+# read at plan time and written to /etc/go-jupyter/langfuse.env on the box.
+# Leave empty to archive transcripts on the box without forwarding.
+# langfuse_env_path = "/home/you/.secrets/langfuse.env"
+
 # Out-of-band local users for the PAM (Tier B) authenticator. Created at boot
 # via useradd + chpasswd and added to /etc/jupyterhub/local_users.txt.
 # Operators can also add users at runtime via `sudo go-jupyter-add-user <name>`.

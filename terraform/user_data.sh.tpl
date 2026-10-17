@@ -59,13 +59,16 @@ npm install -g @anthropic-ai/claude-code configurable-http-proxy
 #     jupyterhub_config.py; the 'opus' alias since 2026-09-29, #24) is
 #     overloaded or unavailable, retry the turn on the current Sonnet release
 #     (the 'sonnet' alias tracks it). Claude Code shows a notice when it does.
+#   * cleanupPeriodDays: Claude Code deletes transcripts under ~/.claude/projects
+#     after 30 days by default; ten years keeps them for the archive that
+#     go-jupyter-trace-sync takes (#28).
 # NOTE: this file is only written at first boot. To change it on a running
 # box, edit /etc/claude-code/managed-settings.json in place as well; editing
 # only this template changes user_data, which Terraform treats as an instance
 # replacement (blocked by prevent_destroy).
 mkdir -p /etc/claude-code
 cat > /etc/claude-code/managed-settings.json <<'MANAGED_SETTINGS_EOF'
-{"autoUpdatesDisabled": true, "fallbackModel": ["sonnet"]}
+{"autoUpdatesDisabled": true, "fallbackModel": ["sonnet"], "cleanupPeriodDays": 3650}
 MANAGED_SETTINGS_EOF
 
 # uv, system-wide.
@@ -143,7 +146,7 @@ GO_JUPYTER_BACKEND=${backend}
 # Which `authorizations.<key>.allow-login` in go-site users.yaml admits a
 # person (empty: every entry with a GitHub handle). Read by
 # go-jupyter-refresh-allowlist; change + run it to apply.
-GO_JUPYTER_ALLOWLIST_AUTHORIZATION=${allowlist_authorization}
+GO_JUPYTER_ALLOWLIST_AUTHORIZATION="${allowlist_authorization}"
 BACKEND_ENV_EOF
 
 # First-party Claude API key for the 'anthropic' backend (only written when
@@ -388,6 +391,28 @@ install -m 0644 "$REPO_DIR/systemd/go-jupyter-update-claude.timer" /etc/systemd/
 mkdir -p /etc/go-jupyter
 systemctl daemon-reload
 systemctl enable --now go-jupyter-update-claude.timer
+
+# Session traces (#28): every account's ~/.claude/projects is archived under
+# /var/lib/go-jupyter/traces (root-only), and completed turns are forwarded to
+# Langfuse through the vendored hook when /etc/go-jupyter/langfuse.env exists.
+# The env file is written here from the terraform langfuse_env_path var when
+# one was given; on a running box it can be placed by hand (mode 0600) and the
+# next tick picks it up. The script sources the keys only around the hook,
+# never into a session's or the unit's environment.
+install -m 0755 "$REPO_DIR/scripts/go-jupyter-trace-sync" /usr/local/sbin/go-jupyter-trace-sync
+install -m 0755 "$REPO_DIR/scripts/go-jupyter-redact-transcript" /usr/local/sbin/go-jupyter-redact-transcript
+install -m 0644 "$REPO_DIR/systemd/go-jupyter-trace-sync.service" /etc/systemd/system/go-jupyter-trace-sync.service
+install -m 0644 "$REPO_DIR/systemd/go-jupyter-trace-sync.timer" /etc/systemd/system/go-jupyter-trace-sync.timer
+install -d -m 0700 /var/lib/go-jupyter/traces /var/lib/go-jupyter/langfuse-state
+mkdir -p /etc/go-jupyter
+%{ if langfuse_env != "" ~}
+install -m 0600 /dev/null /etc/go-jupyter/langfuse.env
+cat > /etc/go-jupyter/langfuse.env <<'LANGFUSE_ENV_EOF'
+${langfuse_env}
+LANGFUSE_ENV_EOF
+%{ endif ~}
+systemctl daemon-reload
+systemctl enable --now go-jupyter-trace-sync.timer
 
 # Caddy: TLS termination + reverse proxy to JupyterHub on localhost:8000.
 # The cloudsmith repo is the official Caddy apt source.

@@ -1,0 +1,19 @@
+[Unit]
+Description=go-jupyter: archive curator transcripts and forward turns to Langfuse
+Documentation=https://github.com/geneontology/go-jupyter/issues/28
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The script sources /etc/go-jupyter/langfuse.env itself, in subshells around
+# curl and the hook, so the keys are never in this unit's environment; no
+# EnvironmentFile.
+ExecStart=/usr/local/sbin/go-jupyter-trace-sync
+# A run with a failed hook, a missed delivery check, or an unreachable Langfuse
+# exits 1 (visible in `systemctl status`); the timer keeps ticking and the next
+# run retries what it can. Low priority, but not idle-class: idle I/O can starve
+# under a busy hub and trip the hook's 120 s timeout.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

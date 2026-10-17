@@ -40,8 +40,13 @@ this file for the operating rules.
   it in go-skills, let the link pass run (it sets each home's copy aside and
   links the canonical one), verify the homes show links, then delete the
   template copy.
-- `scripts/`, `systemd/` — boot and runtime helpers (skills sync timer, user
-  add/refresh/migrate).
+- `scripts/`, `systemd/` — boot and runtime helpers (skills sync timer, trace
+  sync timer, user add/refresh/migrate).
+- `vendor/` — third-party files kept unmodified, with their license and the
+  commit they came from in a README next to them: `vendor/langfuse/` is
+  Langfuse's Claude Code hook, which `go-jupyter-trace-sync` runs as root
+  against the archived transcripts (#28). Update by replacing the file at a
+  newer commit; never edit it here.
 - `etc/` — files cloud-init installs verbatim: `gitconfig` (system-wide git:
   gh as credential helper) and `stubs/` (`docker`, `robot` stand-ins that
   explain the missing ODK toolchain; delete them when Docker arrives, #74).
@@ -65,7 +70,10 @@ this file for the operating rules.
   in `/usr/local/sbin`, the systemd units, `/etc/claude-code/managed-settings.json`,
   `/etc/gitconfig` (from `etc/gitconfig`), `/etc/jupyterhub/jupyterhub.env`
   (including the generated `JUPYTERHUB_CRYPT_KEY`), `/etc/default/go-jupyter`
-  (backend and `GO_JUPYTER_ALLOWLIST_AUTHORIZATION`), the system tools the skills call (`runoak` under `/opt/uv-tools`, obo-scripts under
+  (backend and `GO_JUPYTER_ALLOWLIST_AUTHORIZATION`), `go-jupyter-trace-sync` and `go-jupyter-redact-transcript`
+  with its service and timer, `/etc/go-jupyter/langfuse.env` (from
+  `langfuse_env_path`; placed by hand on a running box) and the
+  `cleanupPeriodDays` key in the managed settings (#28), the system tools the skills call (`runoak` under `/opt/uv-tools`, obo-scripts under
   `/opt/obo-scripts`, and until #74 the `docker`/`robot` stand-ins from `etc/stubs/`) and
   the global Claude Code npm install are all written by cloud-init once.
   `go-jupyter-update` pulls the repo and restarts the hub; it does not reinstall

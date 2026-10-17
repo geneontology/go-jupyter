@@ -180,6 +180,57 @@ cloud-init (never committed, never in the repo's history):
   that look right but are not: those files' mtimes, which idle `claude`
   processes bump every few minutes, and the hub's `last_activity`, which an
   open browser tab keeps fresh by polling.
+- **Session traces: archive, redaction and Langfuse (since #28, October 2026).**
+  Every five minutes `go-jupyter-trace-sync.timer` runs `go-jupyter-trace-sync`
+  as root. Three steps per seeded account. (1) Archive: rsync of
+  `~/.claude/projects/` (the Claude Code transcripts, subagent transcripts
+  included) into `/var/lib/go-jupyter/traces/<user>/projects/`, root-only,
+  never deleted from, in-tree symlinks only; an account whose `~/.claude` or
+  `~/.claude/projects` is itself a symlink is skipped, logged and listed under
+  `langfuse-state/failed/<user>/symlink`, because root must not follow a
+  curator's link into someone else's files. The managed
+  setting `cleanupPeriodDays: 3650` stops Claude Code from deleting the
+  originals after 30 days (on a box built before #28, add it to
+  `/etc/claude-code/managed-settings.json` by hand). (2) Redaction: every
+  archived file is mirrored into `.../<user>/redacted/` through
+  `go-jupyter-redact-transcript`, which masks credential-shaped values
+  (barista and GitHub tokens, Langfuse, Anthropic and AWS keys, bearer headers,
+  `KEY=value` lines whose key says token, secret, password or API key, quoted or
+  not) and leaves everything else byte for byte; only the mirror is ever sent.
+  (3) Forwarding, only when `/etc/go-jupyter/langfuse.env` exists
+  (`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, all three;
+  written by cloud-init from `langfuse_env_path`, or placed by hand, mode 0600,
+  no restart) and one authenticated request to Langfuse succeeds: each mirrored
+  transcript whose mtime or size changed since its last successful run is
+  handed to Langfuse's own Claude Code hook (`vendor/langfuse/`, unmodified,
+  run with the project venv's python), which sends one trace per completed
+  turn (prompt, assistant text, tool inputs and outputs) with user id
+  `github:<login>` for accounts in the GitHub allowlist (`local:<host>:<user>`
+  otherwise) and the tags `box:<host>`, `claude-code` and any `skill:<name>`;
+  a transcript quiet for a day gets one session-end payload, which flushes
+  deferred subagent turns. The hook keeps a byte offset per transcript under
+  `/var/lib/go-jupyter/langfuse-state`, so nothing is sent twice. No key is in
+  any session, on any command line, or in the journal: the script sources the
+  env file in subshells and hands curl its credentials on stdin.
+  The hook is fail-open (an export it cannot deliver is reported on its
+  stderr while its offset still advances), so the script treats a hook run
+  with anything on stderr, a non-zero exit or a 120 s timeout as a failure,
+  does not record it, and logs the reason; and the tick after a successful
+  run asks Langfuse once for the last turn's trace (ids are
+  `sha256("<session>:<turn>")[:32]`), listing a miss under
+  `langfuse-state/failed/<user>/`. Turns the hook has advanced past are not
+  re-sent by the script alone: see `scripts/README.md`, "Re-sending".
+  Verify with `systemctl list-timers 'go-jupyter-trace-sync*'`,
+  `journalctl -t go-jupyter-trace-sync` (one summary line per run: accounts,
+  archived, forwarded, verified, failures), `ls /var/lib/go-jupyter/traces`
+  and the Langfuse project. Deploying on a running box is by hand
+  (`scripts/README.md` has the commands); `go-jupyter-update` would restart
+  the hub, which this does not need. Update the vendored hook by replacing the
+  file at a newer commit and recording the commit and sha256 in
+  `vendor/langfuse/README.md`. Every secret baked into `user_data` (this env
+  file included) is readable by any account on the box through the instance
+  metadata service; that is a pre-existing property of the box tracked
+  separately, and the reason the env file is better placed by hand.
 - **Replacing the box (blue/green).** Bring up a second stack from a separate
   Terraform state with the same `fronting` and hostname, verify it, then on the
   new box run `go-jupyter-migrate <old-host>` (see the script header for the
@@ -382,8 +433,9 @@ Facts the picture leaves out:
 | `terraform/` | AWS provisioning (instance, EIP, SG, IAM, DNS) |
 | `jupyterhub_config.py` | Hub auth, spawner, per-user env and home seeding |
 | `user-templates/` | Starter homes (skills, docs, dotfiles) seeded per user |
-| `scripts/` | Boot/runtime helpers (skills sync, Claude Code updater, user add/refresh/migrate) |
-| `systemd/` | Units for the hub, the skills-sync timer and the Claude Code update timer |
+| `scripts/` | Boot/runtime helpers (skills sync, Claude Code updater, trace sync, user add/refresh/migrate) |
+| `systemd/` | Units for the hub, the skills-sync timer, the Claude Code update timer and the trace-sync timer |
+| `vendor/` | Third-party files installed unmodified: Langfuse's Claude Code hook (`vendor/langfuse/`) |
 | `justfile` | Common operator commands |
 
 ## License

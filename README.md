@@ -215,10 +215,13 @@ cloud-init (never committed, never in the repo's history):
   The hook is fail-open (an export it cannot deliver is reported on its
   stderr while its offset still advances), so the script treats a hook run
   with anything on stderr, a non-zero exit or a 120 s timeout as a failure,
-  does not record it, and logs the reason; and the tick after a successful
-  run asks Langfuse once for the last turn's trace (ids are
-  `sha256("<session>:<turn>")[:32]`), listing a miss under
-  `langfuse-state/failed/<user>/`. Turns the hook has advanced past are not
+  does not record it, and logs the reason; and the ticks after a successful
+  run ask Langfuse for the last turn's trace (ids are
+  `sha256("<session>:<turn>")[:32]`), listing it under
+  `langfuse-state/failed/<user>/` after three misses. Export batches are kept
+  small and compressed (`LANGFUSE_FLUSH_AT=16`, gzip): a long transcript's
+  first import otherwise exceeds the SDK's 64 MB request limit and is
+  dropped whole. Turns the hook has advanced past are not
   re-sent by the script alone: see `scripts/README.md`, "Re-sending".
   Verify with `systemctl list-timers 'go-jupyter-trace-sync*'`,
   `journalctl -t go-jupyter-trace-sync` (one summary line per run: accounts,

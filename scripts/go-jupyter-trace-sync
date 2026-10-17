@@ -142,28 +142,28 @@ fi
 # a config on stdin, never on its command line, which any account could read in
 # /proc while it runs. fd 9 (the lock) is closed for every child.
 
-# lf_curl <path> [curl args...]: authenticated request; exit status is curl's.
+# lf_curl <path>: authenticated GET; prints the HTTP status (000 when curl
+# could not connect); exit 3 when the env file lacks a value.
 lf_curl() (
     set +x
     set -a
     # shellcheck disable=SC1090
     . "$LF_ENV"
     set +a
-    local path="$1"; shift
     [ -n "${LANGFUSE_PUBLIC_KEY:-}" ] && [ -n "${LANGFUSE_SECRET_KEY:-}" ] && [ -n "${LANGFUSE_BASE_URL:-}" ] || exit 3
     printf 'user = "%s:%s"\n' "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" \
-        | curl -sf -m 15 -o /dev/null --config - "$@" "${LANGFUSE_BASE_URL%/}$path" 9>&-
+        | curl -s -m 15 -o /dev/null -w '%{http_code}' --config - "${LANGFUSE_BASE_URL%/}$1" 9>&- || echo 000
 )
 
 UNREACHABLE=0
 if [ "$FORWARD" -eq 1 ] && [ "$DRY" -eq 0 ]; then
-    rc=0; lf_curl /api/public/projects || rc=$?
-    if [ "$rc" -eq 3 ]; then
+    code="$(lf_curl /api/public/projects)" || code="env"
+    if [ "$code" = "env" ]; then
         FORWARD=0; UNREACHABLE=1
         log "$LF_ENV must set LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL; forwarding skipped this run (archive only)"
-    elif [ "$rc" -ne 0 ]; then
+    elif [ "$code" != 200 ]; then
         FORWARD=0; UNREACHABLE=1
-        log "Langfuse not reachable with the keys in $LF_ENV (curl exit $rc); forwarding skipped this run (archive only)"
+        log "Langfuse not reachable with the keys in $LF_ENV (HTTP $code); forwarding skipped this run (archive only)"
     fi
 fi
 
@@ -174,9 +174,13 @@ forward_one() (
     # shellcheck disable=SC1090
     . "$LF_ENV"
     set +a
+    # Small, frequent, compressed export batches: a long transcript's first
+    # import otherwise builds one batch over the SDK's 64 MB request limit and
+    # drops it whole (seen on the first full pass, two transcripts).
     export LANGFUSE_USER_ID="$1" CC_LANGFUSE_STATE_DIR="$LF_STATE" \
         CC_LANGFUSE_TRACE_TAGS="box:$HOST" CC_LANGFUSE_CAPTURE_IMAGES=false \
-        CC_LANGFUSE_TRACE_SEED="$3"
+        CC_LANGFUSE_TRACE_SEED="$3" \
+        LANGFUSE_FLUSH_AT=16 LANGFUSE_FLUSH_INTERVAL=0.5 LANGFUSE_OTEL_COMPRESSION=gzip
     printf '%s' "$2" | timeout "$HOOK_TIMEOUT" "$PYTHON" -I "$HOOK" >/dev/null 2>"$4" 9>&-
 )
 
@@ -295,16 +299,23 @@ for user in "${TARGETS[@]}"; do
         elif [ "${r_ended:-0}" -eq 0 ] && [ $((now - mtime)) -gt "$QUIET_SECS" ]; then ev=SessionEnd
         fi
         if [ -z "$ev" ]; then
-            # Nothing new. Verify the last forwarded turn once, if not yet.
-            if [ "$DRY" -eq 0 ] && [ "${r_verified:-0}" -eq 0 ] && [ "${r_turns:-0}" -gt 0 ]; then
-                if lf_curl "/api/public/traces/$(trace_id "$sid" "$r_turns")"; then
+            # Nothing new. Delivery check on the last forwarded turn: the
+            # verified field is 1 once seen, 0 not yet looked, -N after N
+            # looks that found nothing (404) or could not ask (other codes);
+            # listed under failed/ at -3 and left there.
+            if [ "$DRY" -eq 0 ] && [ "${r_verified:-0}" -le 0 ] && [ "${r_verified:-0}" -gt -3 ] && [ "${r_turns:-0}" -gt 0 ]; then
+                code="$(lf_curl "/api/public/traces/$(trace_id "$sid" "$r_turns")")" || code=000
+                if [ "$code" = 200 ]; then
                     verified=$((verified + 1)); command rm -f "$fail_dir/$sid"
                     printf '%s %s %s %s 1\n' "$r_mtime" "$r_size" "$r_ended" "$r_turns" > "$rec_dir/$sid"
                 else
-                    failures=$((failures + 1))
-                    printf '%s turn %s not found in Langfuse\n' "$(date -u +%FT%TZ)" "$r_turns" > "$fail_dir/$sid"
-                    log "delivery check failed for $user $sid: turn $r_turns not in Langfuse (see $fail_dir/$sid)"
-                    printf '%s %s %s %s 2\n' "$r_mtime" "$r_size" "$r_ended" "$r_turns" > "$rec_dir/$sid"  # 2: checked, missing; not retried
+                    n=$(( ${r_verified:-0} - 1 ))
+                    printf '%s %s %s %s %s\n' "$r_mtime" "$r_size" "$r_ended" "$r_turns" "$n" > "$rec_dir/$sid"
+                    if [ "$n" -le -3 ]; then
+                        failures=$((failures + 1))
+                        printf '%s turn %s not in Langfuse after 3 looks (last HTTP %s)\n' "$(date -u +%FT%TZ)" "$r_turns" "$code" > "$fail_dir/$sid"
+                        log "delivery check failed for $user $sid: turn $r_turns not in Langfuse after 3 looks, last HTTP $code (see $fail_dir/$sid)"
+                    fi
                 fi
             fi
             continue

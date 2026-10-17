@@ -88,6 +88,7 @@ QUIET_SECS="${GO_JUPYTER_QUIET_SECS:-86400}"
 CHUNK_MIN_BYTES="${GO_JUPYTER_CHUNK_MIN_BYTES:-1048576}"   # first import in slices above this size
 CHUNK_LINES="${GO_JUPYTER_CHUNK_LINES:-300}"               # lines per slice
 HOOK_TIMEOUT=120
+CHECKS_PER_RUN="${GO_JUPYTER_CHECKS_PER_RUN:-30}"   # delivery checks per tick; the API is rate-limited
 
 log() { logger -t go-jupyter-trace-sync -- "$*"; echo "$*"; }
 usage() { echo "usage: sudo go-jupyter-trace-sync [--all | --user <name>] [--dry-run]" >&2; exit 2; }
@@ -228,7 +229,7 @@ PY
 # trace_id <session id> <turn>: the deterministic trace id the hook uses.
 trace_id() { printf '%s:%s' "$1" "$2" | sha256sum | cut -c1-32; }
 
-accounts=0; archived=0; forwarded=0; failures=0; verified=0
+accounts=0; archived=0; forwarded=0; failures=0; verified=0; checks=0; throttled=0
 for user in "${TARGETS[@]}"; do
     home="$(home_of "$user")"
     src="$home/.claude/projects"
@@ -328,22 +329,31 @@ for user in "${TARGETS[@]}"; do
         if [ -z "$ev" ]; then
             # Nothing new. Delivery check on the last forwarded turn: the
             # verified field is 1 once seen, 0 not yet looked, -N after N
-            # looks that found nothing (404) or could not ask (other codes);
-            # listed under failed/ at -3 and left there.
-            if [ "$DRY" -eq 0 ] && [ "${r_verified:-0}" -le 0 ] && [ "${r_verified:-0}" -gt -3 ] && [ "${r_turns:-0}" -gt 0 ]; then
+            # looks that got a 404; listed under failed/ at -3 and left there.
+            # Any other answer (429 rate limit, 5xx, no connection) is not a
+            # look: the record stays as it is and the run stops checking. At
+            # most CHECKS_PER_RUN checks per tick, so a backlog drains over
+            # ticks without tripping the API's rate limit.
+            if [ "$DRY" -eq 0 ] && [ "$throttled" -eq 0 ] && [ "$checks" -lt "$CHECKS_PER_RUN" ] \
+                && [ "${r_verified:-0}" -le 0 ] && [ "${r_verified:-0}" -gt -3 ] && [ "${r_turns:-0}" -gt 0 ]; then
+                checks=$((checks + 1))
                 code="$(lf_curl "/api/public/traces/$(trace_id "$sid" "$r_turns")")" || code=000
-                if [ "$code" = 200 ]; then
-                    verified=$((verified + 1)); command rm -f "$fail_dir/$sid"
-                    printf '%s %s %s %s 1\n' "$r_mtime" "$r_size" "$r_ended" "$r_turns" > "$rec_dir/$sid"
-                else
-                    n=$(( ${r_verified:-0} - 1 ))
-                    printf '%s %s %s %s %s\n' "$r_mtime" "$r_size" "$r_ended" "$r_turns" "$n" > "$rec_dir/$sid"
-                    if [ "$n" -le -3 ]; then
-                        failures=$((failures + 1))
-                        printf '%s turn %s not in Langfuse after 3 looks (last HTTP %s)\n' "$(date -u +%FT%TZ)" "$r_turns" "$code" > "$fail_dir/$sid"
-                        log "delivery check failed for $user $sid: turn $r_turns not in Langfuse after 3 looks, last HTTP $code (see $fail_dir/$sid)"
-                    fi
-                fi
+                case "$code" in
+                    200)
+                        verified=$((verified + 1)); command rm -f "$fail_dir/$sid"
+                        printf '%s %s %s %s 1\n' "$r_mtime" "$r_size" "$r_ended" "$r_turns" > "$rec_dir/$sid" ;;
+                    404)
+                        n=$(( ${r_verified:-0} - 1 ))
+                        printf '%s %s %s %s %s\n' "$r_mtime" "$r_size" "$r_ended" "$r_turns" "$n" > "$rec_dir/$sid"
+                        if [ "$n" -le -3 ]; then
+                            failures=$((failures + 1))
+                            printf '%s turn %s not in Langfuse after 3 looks\n' "$(date -u +%FT%TZ)" "$r_turns" > "$fail_dir/$sid"
+                            log "delivery check failed for $user $sid: turn $r_turns not in Langfuse after 3 looks (see $fail_dir/$sid)"
+                        fi ;;
+                    *)
+                        throttled=1
+                        echo "  delivery checks paused this run: Langfuse answered HTTP $code" ;;
+                esac
             fi
             continue
         fi
@@ -379,5 +389,5 @@ for user in "${TARGETS[@]}"; do
 done
 
 [ "$DRY" -eq 0 ] || echo "dry-run: nothing was written and no hook was run."
-log "run done: accounts=$accounts archived=$archived forwarded=$forwarded verified=$verified failures=$failures forwarding=$([ "$FORWARD" -eq 1 ] && echo on || echo off)${DRYFLAG:+ dry-run}"
+log "run done: accounts=$accounts archived=$archived forwarded=$forwarded checked=$checks verified=$verified failures=$failures forwarding=$([ "$FORWARD" -eq 1 ] && echo on || echo off)${DRYFLAG:+ dry-run}"
 [ "$failures" -eq 0 ] && [ "$UNREACHABLE" -eq 0 ]

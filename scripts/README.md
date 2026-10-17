@@ -111,7 +111,9 @@ exits non-zero, runs past 120 s or writes to stderr is a failure: logged,
 not recorded, stderr kept in `langfuse-state/hook-stderr.log`. The ticks
 after a successful run ask Langfuse for the last turn's trace; after three
 misses it is logged and written under `langfuse-state/failed/<user>/<session>`
-(a transient error, such as a rate limit, is retried rather than counted).
+(only a 404 counts as a look; a rate limit, a 5xx or no connection pauses
+the checks for that run; at most 30 checks per tick, `GO_JUPYTER_CHECKS_PER_RUN`,
+so a backlog drains over the following ticks).
 A transcript over 1 MB that has never been forwarded is imported in slices of
 300 lines (`GO_JUPYTER_CHUNK_MIN_BYTES`, `GO_JUPYTER_CHUNK_LINES`), because
 each generation's input is the whole earlier conversation and one run over a

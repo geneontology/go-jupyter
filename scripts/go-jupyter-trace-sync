@@ -88,7 +88,8 @@ QUIET_SECS="${GO_JUPYTER_QUIET_SECS:-86400}"
 CHUNK_MIN_BYTES="${GO_JUPYTER_CHUNK_MIN_BYTES:-1048576}"   # first import in slices above this size
 CHUNK_LINES="${GO_JUPYTER_CHUNK_LINES:-300}"               # lines per slice
 HOOK_TIMEOUT=120
-CHECKS_PER_RUN="${GO_JUPYTER_CHECKS_PER_RUN:-30}"   # delivery checks per tick; the API is rate-limited
+LISTS_PER_RUN="${GO_JUPYTER_LISTS_PER_RUN:-3}"   # per-account trace listings per tick (see below)
+LIST_GAP_SECS=15                                   # between listings: the GET bucket is 5/min on Hobby
 
 log() { logger -t go-jupyter-trace-sync -- "$*"; echo "$*"; }
 usage() { echo "usage: sudo go-jupyter-trace-sync [--all | --user <name>] [--dry-run]" >&2; exit 2; }
@@ -226,10 +227,33 @@ except Exception:
 PY
 }
 
+# lf_list_ids <user id> <out file>: the ids of up to 1000 of that user's
+# traces (10 pages of 100) into <out file>; prints the last HTTP status.
+lf_list_ids() (
+    set +x
+    set -a
+    # shellcheck disable=SC1090
+    . "$LF_ENV"
+    set +a
+    local page code
+    : > "$2"
+    for page in 1 2 3 4 5 6 7 8 9 10; do
+        [ "$page" -eq 1 ] || sleep "$LIST_GAP_SECS"   # pages count against the same small bucket
+        code="$(printf 'user = "%s:%s"\n' "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" \
+            | curl -s -m 30 -o "$2.page" -w '%{http_code}' --config - \
+              "${LANGFUSE_BASE_URL%/}/api/public/traces?userId=$1&limit=100&page=$page" 9>&-)" || code=000
+        [ "$code" = 200 ] || { command rm -f "$2.page"; echo "$code"; exit 0; }
+        n="$("$PYTHON" -I -c 'import json,sys; d=json.load(open(sys.argv[1])); ids=[t["id"] for t in d.get("data",[])]; print("\n".join(ids)); sys.stderr.write(str(len(ids)))' "$2.page" 2>&1 >>"$2" | tail -c 8)"
+        command rm -f "$2.page"
+        [ "${n:-0}" -ge 100 ] || break
+    done
+    echo 200
+)
+
 # trace_id <session id> <turn>: the deterministic trace id the hook uses.
 trace_id() { printf '%s:%s' "$1" "$2" | sha256sum | cut -c1-32; }
 
-accounts=0; archived=0; forwarded=0; failures=0; verified=0; checks=0; throttled=0
+accounts=0; archived=0; forwarded=0; failures=0; verified=0; checks=0; throttled=0; lists=0
 for user in "${TARGETS[@]}"; do
     home="$(home_of "$user")"
     src="$home/.claude/projects"
@@ -312,6 +336,24 @@ for user in "${TARGETS[@]}"; do
     [ "$DRY" -eq 1 ] || install -d -m 0700 "$rec_dir" "$fail_dir"
     scan="$mirror"; [ -d "$scan" ] || scan="$arch/projects"
     now="$(date +%s)"
+    # One listing of the account's traces serves every delivery check below.
+    # Langfuse Cloud's GET bucket for traces is small (5 requests a minute
+    # on Hobby, 15 on Core, 40 on Pro; the ingestion bucket is separate and
+    # far larger), so a run lists at most LISTS_PER_RUN accounts, LIST_GAP_SECS
+    # apart, and only accounts with something to check; a backlog drains over
+    # ticks. A refused listing pauses checks for the run.
+    ids_file=""
+    if [ "$DRY" -eq 0 ] && [ "$throttled" -eq 0 ] && [ "$lists" -lt "$LISTS_PER_RUN" ] \
+        && grep -lqs -E ' (0|-1|-2)$' "$rec_dir"/* 2>/dev/null; then
+        [ "$lists" -eq 0 ] || sleep "$LIST_GAP_SECS"
+        lists=$((lists + 1))
+        ids_file="$(mktemp)"
+        code="$(lf_list_ids "$lf_user" "$ids_file")"
+        if [ "$code" != 200 ]; then
+            throttled=1; command rm -f "$ids_file"; ids_file=""
+            echo "  delivery checks paused this run: Langfuse answered HTTP $code"
+        fi
+    fi
     while IFS= read -r -d '' f; do
         case "$f" in *'"'* | *\\* | *$'\n'* | *$'\r'*)
             echo "  skip $f: quote, backslash or newline in path"; continue ;; esac
@@ -329,15 +371,15 @@ for user in "${TARGETS[@]}"; do
         if [ -z "$ev" ]; then
             # Nothing new. Delivery check on the last forwarded turn: the
             # verified field is 1 once seen, 0 not yet looked, -N after N
-            # looks that got a 404; listed under failed/ at -3 and left there.
-            # Any other answer (429 rate limit, 5xx, no connection) is not a
-            # look: the record stays as it is and the run stops checking. At
-            # most CHECKS_PER_RUN checks per tick, so a backlog drains over
-            # ticks without tripping the API's rate limit.
-            if [ "$DRY" -eq 0 ] && [ "$throttled" -eq 0 ] && [ "$checks" -lt "$CHECKS_PER_RUN" ] \
+            # looks that did not find it in the account's trace listing
+            # (one request per account per tick, up to 1000 traces); listed
+            # under failed/ at -3 and left there. A listing the API refuses
+            # (429, 5xx, no connection) is not a look: records stay as they
+            # are and the run stops checking.
+            if [ "$DRY" -eq 0 ] && [ -n "$ids_file" ] \
                 && [ "${r_verified:-0}" -le 0 ] && [ "${r_verified:-0}" -gt -3 ] && [ "${r_turns:-0}" -gt 0 ]; then
                 checks=$((checks + 1))
-                code="$(lf_curl "/api/public/traces/$(trace_id "$sid" "$r_turns")")" || code=000
+                if grep -qxF "$(trace_id "$sid" "$r_turns")" "$ids_file"; then code=200; else code=404; fi
                 case "$code" in
                     200)
                         verified=$((verified + 1)); command rm -f "$fail_dir/$sid"
@@ -386,8 +428,9 @@ for user in "${TARGETS[@]}"; do
         fi
         command rm -f "$errf"
     done < <(find "$scan" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' -print0)
+    [ -z "$ids_file" ] || command rm -f "$ids_file"
 done
 
 [ "$DRY" -eq 0 ] || echo "dry-run: nothing was written and no hook was run."
-log "run done: accounts=$accounts archived=$archived forwarded=$forwarded checked=$checks verified=$verified failures=$failures forwarding=$([ "$FORWARD" -eq 1 ] && echo on || echo off)${DRYFLAG:+ dry-run}"
+log "run done: accounts=$accounts archived=$archived forwarded=$forwarded listed=$lists checked=$checks verified=$verified failures=$failures forwarding=$([ "$FORWARD" -eq 1 ] && echo on || echo off)${DRYFLAG:+ dry-run}"
 [ "$failures" -eq 0 ] && [ "$UNREACHABLE" -eq 0 ]

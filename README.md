@@ -216,8 +216,10 @@ cloud-init (never committed, never in the repo's history):
   stderr while its offset still advances), so the script treats a hook run
   with anything on stderr, a non-zero exit or a 120 s timeout as a failure,
   does not record it, and logs the reason; and the ticks after a successful
-  run ask Langfuse for the last turn's trace (ids are
-  `sha256("<session>:<turn>")[:32]`), listing it under
+  run check that the last turn's trace (ids are
+  `sha256("<session>:<turn>")[:32]`) appears in a listing of the account's
+  traces, at most three accounts per tick because Langfuse Cloud's trace GET
+  bucket is tiny (5 a minute on Hobby), listing a transcript under
   `langfuse-state/failed/<user>/` after three misses. Every generation carries
   the whole earlier conversation as its input, so a long transcript's spans
   grow with its length; a transcript over 1 MB that has never been forwarded

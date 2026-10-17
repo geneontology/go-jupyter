@@ -112,6 +112,11 @@ not recorded, stderr kept in `langfuse-state/hook-stderr.log`. The ticks
 after a successful run ask Langfuse for the last turn's trace; after three
 misses it is logged and written under `langfuse-state/failed/<user>/<session>`
 (a transient error, such as a rate limit, is retried rather than counted).
+A transcript over 1 MB that has never been forwarded is imported in slices of
+300 lines (`GO_JUPYTER_CHUNK_MIN_BYTES`, `GO_JUPYTER_CHUNK_LINES`), because
+each generation's input is the whole earlier conversation and one run over a
+long history either exceeds the SDK's request limit or outruns the hook's
+final flush.
 
 ```sh
 sudo go-jupyter-trace-sync --dry-run          # what would be archived and forwarded

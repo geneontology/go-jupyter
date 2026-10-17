@@ -66,6 +66,7 @@
 #   GO_JUPYTER_GITHUB_ALLOWLIST (/etc/jupyterhub/github_allowed_users.txt)
 #   GO_JUPYTER_LOCK (/run/go-jupyter-trace-sync.lock)
 #   GO_JUPYTER_QUIET_SECS (86400)
+#   GO_JUPYTER_CHUNK_MIN_BYTES (1048576)   GO_JUPYTER_CHUNK_LINES (300)
 #   GO_JUPYTER_ACCOUNTS: space-separated account names with homes under
 #       GO_JUPYTER_HOME_ROOT/<name>; bypasses getent and lifts the root
 #       requirement, for a local test against directories you own.
@@ -84,6 +85,8 @@ ALLOWLIST="${GO_JUPYTER_GITHUB_ALLOWLIST:-/etc/jupyterhub/github_allowed_users.t
 LOCK="${GO_JUPYTER_LOCK:-/run/go-jupyter-trace-sync.lock}"
 ACCOUNTS="${GO_JUPYTER_ACCOUNTS:-}"
 QUIET_SECS="${GO_JUPYTER_QUIET_SECS:-86400}"
+CHUNK_MIN_BYTES="${GO_JUPYTER_CHUNK_MIN_BYTES:-1048576}"   # first import in slices above this size
+CHUNK_LINES="${GO_JUPYTER_CHUNK_LINES:-300}"               # lines per slice
 HOOK_TIMEOUT=120
 
 log() { logger -t go-jupyter-trace-sync -- "$*"; echo "$*"; }
@@ -179,10 +182,34 @@ forward_one() (
     # drops it whole (seen on the first full pass, two transcripts).
     export LANGFUSE_USER_ID="$1" CC_LANGFUSE_STATE_DIR="$LF_STATE" \
         CC_LANGFUSE_TRACE_TAGS="box:$HOST" CC_LANGFUSE_CAPTURE_IMAGES=false \
-        CC_LANGFUSE_TRACE_SEED="$3" \
-        LANGFUSE_FLUSH_AT=16 LANGFUSE_FLUSH_INTERVAL=0.5 LANGFUSE_OTEL_COMPRESSION=gzip
+        CC_LANGFUSE_TRACE_SEED="$3" CC_LANGFUSE_MAX_CHARS=6000 \
+        LANGFUSE_FLUSH_AT=8 LANGFUSE_FLUSH_INTERVAL=0.5 LANGFUSE_OTEL_COMPRESSION=gzip
     printf '%s' "$2" | timeout "$HOOK_TIMEOUT" "$PYTHON" -I "$HOOK" >/dev/null 2>"$4" 9>&-
 )
+
+# import_sliced <user id> <mirror path> <session id> <stderr file>: a never-seen
+# transcript above CHUNK_MIN_BYTES is shown to the hook in growing slices of
+# CHUNK_LINES lines at the same path, so each run emits a bounded number of
+# turns. Every generation carries the whole earlier conversation as its input,
+# so a long transcript's spans grow with its length: one run over all of it
+# either exceeds the SDK's request limit or outruns the hook's final flush.
+# The full file is restored afterwards with the source mtime. Exit status is
+# the first failing hook run's, or 0.
+import_sliced() {
+    local lf_user="$1" f="$2" sid="$3" errf="$4" total n rc=0 payload
+    total="$(wc -l < "$f")"
+    command mv -f "$f" "$f.full"
+    for ((n = CHUNK_LINES; ; n += CHUNK_LINES)); do
+        head -n "$n" "$f.full" > "$f"
+        payload="$(printf '{"session_id":"%s","transcript_path":"%s","hook_event_name":"Stop","reason":"other"}' "$sid" "$f")"
+        forward_one "$lf_user" "$payload" "$sid" "$errf" || rc=$?
+        if [ "$rc" -ne 0 ] || [ -s "$errf" ]; then [ "$rc" -ne 0 ] || rc=1; break; fi
+        [ "$n" -lt "$total" ] || break
+    done
+    touch -r "$f.full" "$f.full"   # keep the source mtime
+    command mv -f "$f.full" "$f"
+    return "$rc"
+}
 
 # hook_turns <session id> <transcript path>: the hook's turn count for that
 # transcript from its state file, or 0.
@@ -327,7 +354,12 @@ for user in "${TARGETS[@]}"; do
         payload="$(printf '{"session_id":"%s","transcript_path":"%s","hook_event_name":"%s","reason":"other"}' \
             "$sid" "$f" "$ev")"
         errf="$(mktemp)"; rc=0
-        forward_one "$lf_user" "$payload" "$sid" "$errf" || rc=$?
+        if [ ! -f "$rec_dir/$sid" ] && [ "$size" -gt "$CHUNK_MIN_BYTES" ]; then
+            echo "  $user: $sid is $size bytes and new; importing in slices of $CHUNK_LINES lines"
+            import_sliced "$lf_user" "$f" "$sid" "$errf" || rc=$?
+        else
+            forward_one "$lf_user" "$payload" "$sid" "$errf" || rc=$?
+        fi
         if [ "$rc" -eq 0 ] && [ ! -s "$errf" ]; then
             forwarded=$((forwarded + 1))
             ended="$r_ended"; [ "$ev" = SessionEnd ] && ended=1

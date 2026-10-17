@@ -218,10 +218,11 @@ cloud-init (never committed, never in the repo's history):
   does not record it, and logs the reason; and the ticks after a successful
   run ask Langfuse for the last turn's trace (ids are
   `sha256("<session>:<turn>")[:32]`), listing it under
-  `langfuse-state/failed/<user>/` after three misses. Export batches are kept
-  small and compressed (`LANGFUSE_FLUSH_AT=16`, gzip): a long transcript's
-  first import otherwise exceeds the SDK's 64 MB request limit and is
-  dropped whole. Turns the hook has advanced past are not
+  `langfuse-state/failed/<user>/` after three misses. Every generation carries
+  the whole earlier conversation as its input, so a long transcript's spans
+  grow with its length; a transcript over 1 MB that has never been forwarded
+  is therefore shown to the hook in slices of 300 lines, text fields are
+  capped at 6000 characters, and export batches are small and compressed. Turns the hook has advanced past are not
   re-sent by the script alone: see `scripts/README.md`, "Re-sending".
   Verify with `systemctl list-timers 'go-jupyter-trace-sync*'`,
   `journalctl -t go-jupyter-trace-sync` (one summary line per run: accounts,

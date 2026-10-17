@@ -146,7 +146,7 @@ GO_JUPYTER_BACKEND=${backend}
 # Which `authorizations.<key>.allow-login` in go-site users.yaml admits a
 # person (empty: every entry with a GitHub handle). Read by
 # go-jupyter-refresh-allowlist; change + run it to apply.
-GO_JUPYTER_ALLOWLIST_AUTHORIZATION=${allowlist_authorization}
+GO_JUPYTER_ALLOWLIST_AUTHORIZATION="${allowlist_authorization}"
 BACKEND_ENV_EOF
 
 # First-party Claude API key for the 'anthropic' backend (only written when

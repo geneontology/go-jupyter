@@ -2,45 +2,59 @@
 """go-jupyter-redact-transcript — copy a Claude Code transcript with secrets
 masked, for forwarding to Langfuse (#28).
 
-Usage: go-jupyter-redact-transcript <in.jsonl> <out.jsonl>
+Usage: go-jupyter-redact-transcript <in> <out>
        go-jupyter-redact-transcript --self-test
 
 The raw archive under /var/lib/go-jupyter/traces is root-only and keeps
-everything; this is what leaves the box. It works line by line on the JSON
-text, replacing the VALUE part of anything that looks like a credential with
-"[REDACTED:<kind>]", and leaves the rest of the line byte for byte. Patterns,
-chosen for what a curator's session can actually contain:
+everything; this is what leaves the box. It works line by line on the text
+(JSON lines, or a subagent's .meta.json), replacing the VALUE part of anything
+that looks like a credential with "[REDACTED:<kind>]" and leaving the rest of
+the line byte for byte. Inside a JSON line a quote is written \\" and a
+backslash \\\\, so the patterns accept an escaped or bare quote around a value
+and stop at the next one. Patterns, chosen for what a curator's session can
+actually contain:
 
   barista   BARISTA_TOKEN=<value>, and token=<value> in a barista URL or form
   github    gh / GitHub tokens: ghp_, gho_, ghu_, ghs_, ghr_, github_pat_
   langfuse  pk-lf-, sk-lf- keys
   anthropic sk-ant- keys
-  aws       AKIA... access key ids, and aws_secret_access_key=<value>
-  bearer    "Authorization: Bearer <value>" and "Bearer <value>" in headers
+  aws       AKIA/ASIA access key ids, and aws_secret_access_key=<value>
+  bearer    "Bearer <value>" in a header
   jwt       three dot-separated base64url parts starting with eyJ
-  envfile   KEY=<value> where KEY contains TOKEN, SECRET, PASSWORD, PASSWD,
-            API_KEY or APIKEY (covers `cat ~/.env` output and the echo that
-            wrote it). A value that is itself a shell reference ($VAR) is
-            left alone: it is not a secret.
+  envfile   KEY=<value> where KEY is an environment-variable name (upper case,
+            digits, underscores) with TOKEN, SECRET, PASSWORD, PASSWD, API_KEY
+            or APIKEY as a whole underscore-delimited word (covers `cat ~/.env`
+            and the echo that wrote it; lower-case words such as "secretion" or
+            "total_tokens" are not keys and are left alone)
 
-False positives cost a masked value in a trace; a miss costs a secret in a
-third-party store, so the patterns err toward masking. Exit 0 on success, 1
-on a read or write error.
+A value that is itself a shell reference ($VAR) is not a secret and is left
+alone; so is a value already masked. False positives cost a masked value in
+a trace; a miss costs a secret in a third-party store, so the patterns err
+toward masking. Exit 0 on success, 1 on a read or write error.
 """
 import re
 import sys
 
+# A value: optionally opened by an escaped or bare quote, then run until
+# whitespace, a quote, a backslash or an ampersand; not a $reference, not an
+# already-masked value.
+_Q = r"(?:\\?[\"'])?"
+_VAL = r"(?!\$)(?!\[REDACTED:)([^\s\"'&\\]{6,})"
+_VAL_SHORT = r"(?!\$)(?!\[REDACTED:)([^\s\"'&\\]{4,})"
+
 PATTERNS = [
-    ("barista", re.compile(r"(BARISTA_TOKEN=)(?!\$)([^\s\"'&\\]+)")),
-    ("barista", re.compile(r"((?:[?&]|data-urlencode[= ]+[\"']?)token=)(?!\$)([^\s\"'&\\]+)")),
+    ("barista", re.compile(r"(BARISTA_TOKEN\s*=\s*" + _Q + ")" + _VAL_SHORT)),
+    ("barista", re.compile(r"((?:[?&]|data-urlencode[= ]+" + _Q + r")token=)" + _VAL_SHORT)),
     ("github", re.compile(r"\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})")),
     ("langfuse", re.compile(r"\b([ps]k-lf-[A-Za-z0-9-]{8,})")),
     ("anthropic", re.compile(r"\b(sk-ant-[A-Za-z0-9_-]{16,})")),
     ("aws", re.compile(r"\b((?:AKIA|ASIA)[A-Z0-9]{16})\b")),
-    ("aws", re.compile(r"(?i)(aws_secret_access_key\s*[=:]\s*)([^\s\"'\\]+)")),
-    ("bearer", re.compile(r"(?i)(bearer\s+)([A-Za-z0-9._~+/=-]{16,})")),
+    ("aws", re.compile(r"(?i)(aws_secret_access_key\s*[=:]\s*" + _Q + ")" + _VAL)),
+    ("bearer", re.compile(r"(?i)(bearer\s+)(?!\$)(?!\[REDACTED:)([A-Za-z0-9._~+/=-]{16,})")),
     ("jwt", re.compile(r"\b(eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})")),
-    ("envfile", re.compile(r"(?i)\b((?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY)[A-Z0-9_]*)=)(?!\$)([^\s\"'&\\]{6,})")),
+    ("envfile", re.compile(
+        r"\b((?:[A-Z0-9]+_)*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY)(?:_[A-Z0-9]+)*\s*=\s*"
+        + _Q + ")" + _VAL)),
 ]
 
 
@@ -67,28 +81,34 @@ def self_test() -> int:
     akia = "AK" + "IA" + "IOSFODNN7EX" + "AMPLE"
     aws_secret = "wJalrXUtnFEMI" + "/K7MDENG/bPxRf" + "iCYEX" + "AMPLEKEY"
     jwt = "eyJ" + fake("", 12) + "." + fake("eyJ", 12) + "." + fake("", 16)
+    # (input, expected output); None means the line must come back unchanged.
     cases = [
-        (f"echo 'BARISTA_TOKEN={barista}' > ~/.env", barista),
-        ('--data-urlencode "token=$BARISTA_TOKEN"', None),  # unexpanded variable: nothing to mask
-        (f'--data-urlencode "token={barista}"', barista),
-        (f"http://barista-dev.example/api/x?token={barista}&foo=1", barista),
-        (f"hosts.yml: oauth_token: {ghp}", ghp),
-        (f"LANGFUSE_SECRET_KEY={lf}", lf),
-        (f"export ANTHROPIC_API_KEY={ant}", ant),
-        (f"Authorization: Bearer {jwt}", jwt[:12]),
-        (f"AWS_SECRET_ACCESS_KEY={aws_secret}", aws_secret[:13]),
-        (f"aws configure set aws_access_key_id {akia}", akia),
+        (f"echo 'BARISTA_TOKEN={barista}' > ~/.env", "echo 'BARISTA_TOKEN=[REDACTED:barista]' > ~/.env"),
+        ('--data-urlencode "token=$BARISTA_TOKEN"', None),
+        (f'--data-urlencode "token={barista}"', '--data-urlencode "token=[REDACTED:barista]"'),
+        (f"http://barista-dev.example/api/x?token={barista}&foo=1", "http://barista-dev.example/api/x?token=[REDACTED:barista]&foo=1"),
+        # as it appears inside a JSON line: quotes escaped
+        (f'"command":"cat ~/.env"}}\\n{{"out":"BARISTA_TOKEN=\\"{barista}\\"\\nAPI_KEY=\\"{ant}\\""',
+         '"command":"cat ~/.env"}\\n{"out":"BARISTA_TOKEN=\\"[REDACTED:barista]\\"\\nAPI_KEY=\\"[REDACTED:anthropic]\\""'),
+        (f"hosts.yml: oauth_token: {ghp}", "hosts.yml: oauth_token: [REDACTED:github]"),
+        (f"LANGFUSE_SECRET_KEY={lf}", "LANGFUSE_SECRET_KEY=[REDACTED:langfuse]"),
+        (f"export ANTHROPIC_API_KEY={ant}", "export ANTHROPIC_API_KEY=[REDACTED:anthropic]"),
+        (f"Authorization: Bearer {jwt}", "Authorization: Bearer [REDACTED:bearer]"),
+        (f"AWS_SECRET_ACCESS_KEY={aws_secret}", "AWS_SECRET_ACCESS_KEY=[REDACTED:aws]"),
+        ("aws_secret_access_key=$AWS_SECRET_ACCESS_KEY", None),
+        (f"aws configure set aws_access_key_id {akia}", "aws configure set aws_access_key_id [REDACTED:aws]"),
+        (f'DB_PASSWORD="{fake("pw", 10)}"', 'DB_PASSWORD="[REDACTED:envfile]"'),
+        ("secretion=GO:0046903 secretion_model=gomodel:6ab067da00006193 total_tokens=100000", None),
         ("The model id is gomodel:6ab067da00006193 and the PMID is 37956198", None),
         ("TOKEN_COUNT=42000 tokens used", None),  # value too short to be a credential
+        ("GITHUB_TOKEN=[REDACTED:github] already masked", None),
     ]
     bad = 0
-    for text, secret in cases:
+    for text, expected in cases:
         out = redact_line(text)
-        if secret is not None and secret in out:
-            print(f"FAIL (not masked): {text!r} -> {out!r}")
-            bad += 1
-        if secret is None and out != text:
-            print(f"FAIL (changed a safe line): {text!r} -> {out!r}")
+        want = text if expected is None else expected
+        if out != want:
+            print(f"FAIL: {text!r}\n  got:  {out!r}\n  want: {want!r}")
             bad += 1
     print("self-test:", "ok" if bad == 0 else f"{bad} failure(s)", f"({len(cases)} cases)")
     return 1 if bad else 0
@@ -98,7 +118,7 @@ def main(argv) -> int:
     if len(argv) == 2 and argv[1] == "--self-test":
         return self_test()
     if len(argv) != 3:
-        print(__doc__.strip().splitlines()[2], file=sys.stderr)
+        print("usage: go-jupyter-redact-transcript <in> <out> | --self-test", file=sys.stderr)
         return 2
     src, dst = argv[1], argv[2]
     try:

@@ -3,14 +3,14 @@ Description=go-jupyter: periodically archive transcripts and forward turns to La
 Documentation=https://github.com/geneontology/go-jupyter/issues/28
 
 [Timer]
-# First run shortly after boot, then every 5 minutes. A tick is one rsync per
-# account plus one hook process per transcript that changed since the last
-# tick (an idle session bumps its transcript's mtime, so an idle session costs
-# one short hook run per tick that emits nothing). Overlapping runs skip on
-# the script's lock.
+# First run shortly after boot, then every 5 minutes after the previous run
+# ended. A tick is one rsync per account, a redaction pass over changed files,
+# one hook process per transcript whose mtime or size changed, and one request
+# per transcript forwarded last tick (the delivery check). Overlapping runs
+# skip on the script's lock. (Persistent= would do nothing here: it applies
+# to OnCalendar= timers only.)
 OnBootSec=10min
 OnUnitActiveSec=5min
-Persistent=true
 
 [Install]
 WantedBy=timers.target

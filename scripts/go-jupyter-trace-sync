@@ -4,51 +4,54 @@
 # forward completed turns to Langfuse (#28).
 #
 # Runs as root on a systemd timer (~5 min). Nothing runs inside a curator's
-# session and no Langfuse key is ever in a session's environment. Per seeded
-# account (UID >= 1000, not ubuntu/nobody, ~/.seeded present; the same set
-# go-jupyter-refresh-user --all acts on):
+# session and no Langfuse key is ever in a session's environment, on a command
+# line, or in the journal. Per seeded account (UID >= 1000, not ubuntu/nobody,
+# ~/.seeded present; the same set go-jupyter-refresh-user --all acts on):
 #
 #   archive:  ~/.claude/projects/ -> /var/lib/go-jupyter/traces/<user>/projects/
-#             (rsync, never --delete; the copy is root-owned, mode 0700). Claude
-#             Code's own transcript cleanup is pushed out to ten years by
-#             cleanupPeriodDays in /etc/claude-code/managed-settings.json.
-#   redact:   every file of the archive is mirrored into
-#             /var/lib/go-jupyter/traces/<user>/redacted/ (same layout, source
-#             mtimes kept); .jsonl files pass through go-jupyter-redact-transcript
-#             on the way, which masks credential-shaped values (barista and
-#             GitHub tokens, API keys, bearer headers, KEY=value lines). Only the
-#             mirror is ever sent anywhere; the raw archive stays on the box.
+#             rsync -rlt --safe-links, never --delete; the copy is root's, mode
+#             0700. An account whose ~/.claude or ~/.claude/projects is a
+#             symlink is skipped and logged (root must never follow a curator's
+#             link into someone else's files). Claude Code's own transcript
+#             cleanup is pushed out to ten years by cleanupPeriodDays in
+#             /etc/claude-code/managed-settings.json.
+#   redact:   every archived file is mirrored into .../<user>/redacted/ (same
+#             layout, source mtimes kept); .jsonl and .json files go through
+#             go-jupyter-redact-transcript, which masks credential-shaped values.
+#             Only the mirror is ever sent anywhere; the raw archive stays here.
 #   forward:  only when /etc/go-jupyter/langfuse.env exists (LANGFUSE_PUBLIC_KEY,
-#             LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL; placed by cloud-init from
-#             terraform, or by hand; mode 0600). For each top-level transcript in
-#             the MIRROR (<slug>/<session>.jsonl, not the subagent ones under
-#             <session>/subagents/) whose mtime is newer than the account's stamp
-#             from the previous run, the vendored Langfuse hook
-#             (vendor/langfuse/langfuse_hook.py, run with the project venv's
-#             python) gets the Stop-style payload on stdin, or SessionEnd when the
-#             transcript has been quiet for 30 minutes (that also flushes deferred
-#             subagent turns). The hook keeps a byte offset per transcript under
-#             /var/lib/go-jupyter/langfuse-state, so a rerun emits nothing new.
-#             The env file is sourced in a subshell: the keys reach the hook and
-#             nothing else, not this process, not the log.
+#             LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL, all three required; placed
+#             by cloud-init from terraform, or by hand; mode 0600) and one
+#             authenticated request to Langfuse succeeds. Each top-level
+#             transcript in the mirror (<slug>/<session>.jsonl, not the subagent
+#             ones under <session>/subagents/) whose mtime or size differs from
+#             the per-transcript record under <state dir>/state/<user>/<session>
+#             is handed to the vendored Langfuse hook (vendor/langfuse/
+#             langfuse_hook.py, run with the project venv's python) with a
+#             Stop payload; a transcript quiet for QUIET_SECS that has not had
+#             one gets a SessionEnd payload once (that flushes deferred subagent
+#             turns; the vendored hook then drops continuation rows of the last
+#             open turn if the session resumes, a known limit, hence the long
+#             quiet period). The hook keeps a byte offset per transcript under
+#             <state dir>/langfuse_state.json, so a rerun emits nothing new.
 #             User id: github:<login> when the account is in the hub's GitHub
-#             allowlist, else local:<host>:<user>. Tag: box:<host>.
+#             allowlist, else local:<host>:<user>. Tags: box:<host>, plus the
+#             hook's own (claude-code, skill:<name>). Trace ids are
+#             sha256("<session>:<turn>")[:32] (CC_LANGFUSE_TRACE_SEED).
 #
-# The hook is fail-open: when Langfuse cannot be reached it still exits 0 and
-# advances its offset, and those turns are not re-sent. So before any hook
-# runs, one authenticated request checks that Langfuse answers; if it does
-# not, forwarding is skipped for the whole run (nothing advances, the archive
-# still happens, the run exits 1 so the unit shows it). A hook failure
-# (non-zero exit, or the 120 s timeout) is logged and the run continues; that
-# account's stamp is not advanced, so its recent transcripts are retried on
-# the next tick (cheap: the hook's offsets make a retry a no-op). Each
-# transcript's trace ids are derived from its session id
-# (CC_LANGFUSE_TRACE_SEED), so a deliberate re-send after clearing the hook's
-# state overwrites the same traces instead of duplicating them. A transcript
-# that has never been forwarded (no marker under <state dir>/seen/) is
-# forwarded whatever its mtime, which covers homes copied in by
-# go-jupyter-migrate. Overlapping runs skip (flock). The hook's own log is
-# <state dir>/langfuse_hook.log; this script reads only its exit status.
+# Delivery checks. The hook is fail-open: an export it cannot deliver is
+# reported on its stderr while its offset still advances, so (1) nothing is
+# forwarded in a run where the authenticated request fails (archive only,
+# exit 1); (2) a hook run that exits non-zero, times out, or writes anything
+# to stderr counts as a failure, the record is not updated, and the reason is
+# logged; (3) after a successful run the record holds the hook's turn count,
+# and the next tick asks Langfuse for that turn's trace once; a miss is logged
+# and listed under <state dir>/failed/<user>/<session> for an operator. Turns
+# the hook has already advanced past cannot be re-sent by this script alone:
+# see scripts/README.md, "Re-sending".
+#
+# Overlapping runs skip (flock). The hook's own log is
+# <state dir>/langfuse_hook.log; its stderr goes to <state dir>/hook-stderr.log.
 #
 # Usage: go-jupyter-trace-sync [--all | --user <name>] [--dry-run]
 #   --dry-run   print what would be archived (rsync -n) and forwarded; run no hook
@@ -62,11 +65,13 @@
 #   GO_JUPYTER_LANGFUSE_ENV (/etc/go-jupyter/langfuse.env)
 #   GO_JUPYTER_GITHUB_ALLOWLIST (/etc/jupyterhub/github_allowed_users.txt)
 #   GO_JUPYTER_LOCK (/run/go-jupyter-trace-sync.lock)
+#   GO_JUPYTER_QUIET_SECS (86400)
 #   GO_JUPYTER_ACCOUNTS: space-separated account names with homes under
 #       GO_JUPYTER_HOME_ROOT/<name>; bypasses getent and lifts the root
 #       requirement, for a local test against directories you own.
 #
 set -euo pipefail
+set +x   # never trace this script: the env file holds keys
 
 HOME_ROOT="${GO_JUPYTER_HOME_ROOT:-/home}"
 TRACE_ROOT="${GO_JUPYTER_TRACE_ROOT:-/var/lib/go-jupyter/traces}"
@@ -78,8 +83,8 @@ LF_ENV="${GO_JUPYTER_LANGFUSE_ENV:-/etc/go-jupyter/langfuse.env}"
 ALLOWLIST="${GO_JUPYTER_GITHUB_ALLOWLIST:-/etc/jupyterhub/github_allowed_users.txt}"
 LOCK="${GO_JUPYTER_LOCK:-/run/go-jupyter-trace-sync.lock}"
 ACCOUNTS="${GO_JUPYTER_ACCOUNTS:-}"
+QUIET_SECS="${GO_JUPYTER_QUIET_SECS:-86400}"
 HOOK_TIMEOUT=120
-QUIET_SECS=1800   # a transcript untouched this long gets SessionEnd, else Stop
 
 log() { logger -t go-jupyter-trace-sync -- "$*"; echo "$*"; }
 usage() { echo "usage: sudo go-jupyter-trace-sync [--all | --user <name>] [--dry-run]" >&2; exit 2; }
@@ -129,30 +134,42 @@ if [ ! -r "$LF_ENV" ]; then
     log "forwarding off: no readable $LF_ENV (archive only)"
 fi
 if [ "$DRY" -eq 0 ]; then
-    install -d -m 0700 "$TRACE_ROOT" "$LF_STATE" "$LF_STATE/stamps" "$LF_STATE/seen"
+    install -d -m 0700 "$TRACE_ROOT" "$LF_STATE" "$LF_STATE/state" "$LF_STATE/failed"
 fi
 
-# langfuse_reachable: one authenticated GET in a subshell that sources the env
-# file; true when Langfuse answers 2xx. Keys never leave the subshell.
-langfuse_reachable() {
-    (
-        set -a
-        # shellcheck disable=SC1090
-        . "$LF_ENV"
-        set +a
-        [ -n "${LANGFUSE_PUBLIC_KEY:-}" ] && [ -n "${LANGFUSE_SECRET_KEY:-}" ] && [ -n "${LANGFUSE_BASE_URL:-}" ] || exit 1
-        curl -sf -m 15 -o /dev/null -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" "${LANGFUSE_BASE_URL%/}/api/public/projects"
-    ) 9>&-
-}
+# Every function below that reads the env file runs as a subshell (parenthesised
+# body): the keys exist only inside it and die with it. curl gets them through
+# a config on stdin, never on its command line, which any account could read in
+# /proc while it runs. fd 9 (the lock) is closed for every child.
+
+# lf_curl <path> [curl args...]: authenticated request; exit status is curl's.
+lf_curl() (
+    set +x
+    set -a
+    # shellcheck disable=SC1090
+    . "$LF_ENV"
+    set +a
+    local path="$1"; shift
+    [ -n "${LANGFUSE_PUBLIC_KEY:-}" ] && [ -n "${LANGFUSE_SECRET_KEY:-}" ] && [ -n "${LANGFUSE_BASE_URL:-}" ] || exit 3
+    printf 'user = "%s:%s"\n' "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" \
+        | curl -sf -m 15 -o /dev/null --config - "$@" "${LANGFUSE_BASE_URL%/}$path" 9>&-
+)
+
 UNREACHABLE=0
-if [ "$FORWARD" -eq 1 ] && [ "$DRY" -eq 0 ] && ! langfuse_reachable; then
-    FORWARD=0; UNREACHABLE=1
-    log "Langfuse not reachable with the keys in $LF_ENV; forwarding skipped this run (archive only)"
+if [ "$FORWARD" -eq 1 ] && [ "$DRY" -eq 0 ]; then
+    rc=0; lf_curl /api/public/projects || rc=$?
+    if [ "$rc" -eq 3 ]; then
+        FORWARD=0; UNREACHABLE=1
+        log "$LF_ENV must set LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL; forwarding skipped this run (archive only)"
+    elif [ "$rc" -ne 0 ]; then
+        FORWARD=0; UNREACHABLE=1
+        log "Langfuse not reachable with the keys in $LF_ENV (curl exit $rc); forwarding skipped this run (archive only)"
+    fi
 fi
 
-# forward_one <user id> <payload>: ALWAYS called in a subshell, so the env
-# file's keys die with it. Exit status is the hook's (124: timeout).
-forward_one() {
+# forward_one <user id> <payload> <session id> <stderr file>: run the hook once.
+forward_one() (
+    set +x
     set -a
     # shellcheck disable=SC1090
     . "$LF_ENV"
@@ -160,95 +177,164 @@ forward_one() {
     export LANGFUSE_USER_ID="$1" CC_LANGFUSE_STATE_DIR="$LF_STATE" \
         CC_LANGFUSE_TRACE_TAGS="box:$HOST" CC_LANGFUSE_CAPTURE_IMAGES=false \
         CC_LANGFUSE_TRACE_SEED="$3"
-    printf '%s' "$2" | timeout "$HOOK_TIMEOUT" "$PYTHON" "$HOOK" >/dev/null 9>&-
+    printf '%s' "$2" | timeout "$HOOK_TIMEOUT" "$PYTHON" -I "$HOOK" >/dev/null 2>"$4" 9>&-
+)
+
+# hook_turns <session id> <transcript path>: the hook's turn count for that
+# transcript from its state file, or 0.
+hook_turns() {
+    "$PYTHON" -I - "$LF_STATE/langfuse_state.json" "$1" "$2" <<'PY' 2>/dev/null || echo 0
+import hashlib, json, sys
+try:
+    state = json.load(open(sys.argv[1]))
+    key = hashlib.sha256(f"{sys.argv[2]}::{sys.argv[3]}".encode("utf-8")).hexdigest()
+    print(int(state.get(key, {}).get("turn_count", 0)))
+except Exception:
+    print(0)
+PY
 }
 
-accounts=0; archived=0; forwarded=0; failures=0
+# trace_id <session id> <turn>: the deterministic trace id the hook uses.
+trace_id() { printf '%s:%s' "$1" "$2" | sha256sum | cut -c1-32; }
+
+accounts=0; archived=0; forwarded=0; failures=0; verified=0
 for user in "${TARGETS[@]}"; do
     home="$(home_of "$user")"
     src="$home/.claude/projects"
     if [ -z "$home" ] || [ ! -d "$src" ]; then echo "  skip $user: no $src"; continue; fi
+    if [ -L "$home" ] || [ -L "$home/.claude" ] || [ -L "$src" ]; then
+        # Not counted as a failure (it would fail every tick); listed for an
+        # operator under failed/<user>/symlink instead, and logged each run.
+        log "skip $user: $src or a parent is a symlink; refusing to follow it as root (see $LF_STATE/failed/$user/symlink)"
+        if [ "$DRY" -eq 0 ]; then
+            install -d -m 0700 "$LF_STATE/failed/$user"
+            printf '%s %s or a parent is a symlink; account skipped\n' "$(date -u +%FT%TZ)" "$src" > "$LF_STATE/failed/$user/symlink"
+        fi
+        continue
+    fi
     accounts=$((accounts + 1))
     arch="$TRACE_ROOT/$user"
-    user_failed=0
 
-    # 1. Archive. Owner/group are not preserved: the copy is root's. -i prints
-    #    one line per transferred file (also under -n); the top-level transcripts
-    #    (<slug>/<session>.jsonl) among them are counted below.
+    # 1. Archive. Regular files, directories and in-tree symlinks only, never
+    #    devices or links pointing outside the tree; owner/group not kept (the
+    #    copy is root's). rsync exit 23/24 (a file vanished or was unreadable
+    #    while it ran) is routine on live transcripts: logged, the run goes on.
+    #    -i prints one line per transferred file; top-level transcripts
+    #    (<slug>/<session>.jsonl) among them are counted.
     [ "$DRY" -eq 1 ] || install -d -m 0700 "$arch" "$arch/projects"
-    n="$(rsync -a --no-owner --no-group -i $DRYFLAG "$src/" "$arch/projects/" \
-        | { grep -cE '^>f[^ ]* [^/]+/[^/]+\.jsonl$' || true; })"
+    rs_out="$(mktemp)"; rs_rc=0
+    rsync -rlt --safe-links --no-owner --no-group -i $DRYFLAG "$src/" "$arch/projects/" >"$rs_out" 2>&1 || rs_rc=$?
+    n="$(grep -cE '^>f[^ ]* [^/]+/[^/]+\.jsonl$' "$rs_out" || true)"
+    command rm -f "$rs_out"
+    case "$rs_rc" in
+        0) ;;
+        23|24) echo "  $user: rsync exit $rs_rc (partial transfer; a file vanished or was unreadable), continuing" ;;
+        *) log "rsync failed for $user: exit $rs_rc; account skipped this run"; failures=$((failures + 1)); continue ;;
+    esac
     archived=$((archived + n))
     [ "$DRY" -eq 0 ] || echo "  $user: would archive $n transcript(s) to $arch/projects/"
 
-    # 2. Redacted mirror: every archive file not yet mirrored, or changed since,
-    #    goes to <arch>/redacted/ with the source mtime kept; .jsonl through the
-    #    redactor, anything else (subagent .meta.json) copied. Nothing else is
-    #    ever forwarded. A redaction failure skips that file and counts.
     [ "$FORWARD" -eq 1 ] || continue
     if [ ! -d "$arch/projects" ]; then
         echo "  $user: no archive yet; a real run archives first, then forwards all of it"
         continue
     fi
+
+    # 2. Redacted mirror: every archive file not yet mirrored, or whose mtime or
+    #    size changed since, goes to <arch>/redacted/ with the source mtime
+    #    kept; .jsonl and .json through the redactor, anything else copied.
     mirror="$arch/redacted"
     if [ "$DRY" -eq 0 ]; then
         install -d -m 0700 "$mirror"
         while IFS= read -r -d '' src_f; do
             rel="${src_f#"$arch/projects/"}"; dst_f="$mirror/$rel"
-            if [ -e "$dst_f" ] && [ ! "$src_f" -nt "$dst_f" ]; then continue; fi
+            if [ -e "$dst_f" ] && [ ! "$src_f" -nt "$dst_f" ] \
+                && [ "$(stat -c %s "$src_f")" -eq "$(stat -c %s "$dst_f")" ]; then continue; fi
             install -d -m 0700 "$(dirname "$dst_f")"
+            ok=1
             case "$src_f" in
-                *.jsonl) if ! "$PYTHON" -I "$REDACT" "$src_f" "$dst_f.tmp" 9>&-; then
-                             failures=$((failures + 1)); user_failed=1
-                             log "redaction failed for $user $rel"; command rm -f "$dst_f.tmp"; continue
-                         fi ;;
-                *)       command cp -f "$src_f" "$dst_f.tmp" ;;
+                *.jsonl|*.json) "$PYTHON" -I "$REDACT" "$src_f" "$dst_f.tmp" 9>&- || ok=0 ;;
+                *)              command cp -f "$src_f" "$dst_f.tmp" || ok=0 ;;
             esac
-            touch -r "$src_f" "$dst_f.tmp" && command mv -f "$dst_f.tmp" "$dst_f"
+            if [ "$ok" -eq 1 ]; then
+                touch -r "$src_f" "$dst_f.tmp" && command mv -f "$dst_f.tmp" "$dst_f" || ok=0
+            fi
+            if [ "$ok" -eq 0 ]; then
+                failures=$((failures + 1)); command rm -f "$dst_f.tmp"
+                log "mirror failed for $user $rel"
+            fi
         done < <(find "$arch/projects" -type f -print0)
     fi
+
+    # 3. Forward. One record per transcript under <state>/state/<user>/<session>:
+    #    "<mtime> <size> <ended> <turns> <verified>" as last seen by a run that
+    #    succeeded. Changed mtime or size, or no record: Stop payload. Quiet for
+    #    QUIET_SECS and not ended: SessionEnd payload, once. Otherwise, if the
+    #    record is unverified, ask Langfuse for the last turn's trace once.
     if grep -qixF -- "$user" "$ALLOWLIST" 2>/dev/null; then
         lf_user="github:$user"
     else
         lf_user="local:$HOST:$user"
     fi
-    stamp="$LF_STATE/stamps/$user"
-    seen="$LF_STATE/seen/$user"
-    [ "$DRY" -eq 1 ] || install -d -m 0700 "$seen"
-    now="$(date +%s)"
-    # Pass start, at full timestamp precision: becomes the stamp if the pass
-    # ends clean. A whole-second stamp lost a sub-second race once in testing.
-    [ "$DRY" -eq 1 ] || touch "$stamp.new"
+    rec_dir="$LF_STATE/state/$user"; fail_dir="$LF_STATE/failed/$user"
+    [ "$DRY" -eq 1 ] || install -d -m 0700 "$rec_dir" "$fail_dir"
     scan="$mirror"; [ -d "$scan" ] || scan="$arch/projects"
+    now="$(date +%s)"
     while IFS= read -r -d '' f; do
-        case "$f" in *'"'* | *\\*) echo "  skip $f: quote or backslash in path"; continue ;; esac
+        case "$f" in *'"'* | *\\* | *$'\n'* | *$'\r'*)
+            echo "  skip $f: quote, backslash or newline in path"; continue ;; esac
         sid="$(basename "$f" .jsonl)"
-        # Forward when changed since the account's last clean pass, or never forwarded.
-        if [ -e "$stamp" ] && [ -e "$seen/$sid" ] && [ ! "$f" -nt "$stamp" ]; then continue; fi
-        if [ $((now - $(stat -c %Y "$f"))) -gt "$QUIET_SECS" ]; then ev=SessionEnd; else ev=Stop; fi
+        mtime="$(stat -c %Y "$f")"; size="$(stat -c %s "$f")"
+        r_mtime=""; r_size=""; r_ended=0; r_turns=0; r_verified=0
+        if [ -f "$rec_dir/$sid" ]; then
+            read -r r_mtime r_size r_ended r_turns r_verified < "$rec_dir/$sid" || true
+        fi
+        changed=1; [ "$mtime" = "$r_mtime" ] && [ "$size" = "$r_size" ] && changed=0
+        ev=""
+        if [ "$changed" -eq 1 ]; then ev=Stop
+        elif [ "${r_ended:-0}" -eq 0 ] && [ $((now - mtime)) -gt "$QUIET_SECS" ]; then ev=SessionEnd
+        fi
+        if [ -z "$ev" ]; then
+            # Nothing new. Verify the last forwarded turn once, if not yet.
+            if [ "$DRY" -eq 0 ] && [ "${r_verified:-0}" -eq 0 ] && [ "${r_turns:-0}" -gt 0 ]; then
+                if lf_curl "/api/public/traces/$(trace_id "$sid" "$r_turns")"; then
+                    verified=$((verified + 1)); command rm -f "$fail_dir/$sid"
+                    printf '%s %s %s %s 1\n' "$r_mtime" "$r_size" "$r_ended" "$r_turns" > "$rec_dir/$sid"
+                else
+                    failures=$((failures + 1))
+                    printf '%s turn %s not found in Langfuse\n' "$(date -u +%FT%TZ)" "$r_turns" > "$fail_dir/$sid"
+                    log "delivery check failed for $user $sid: turn $r_turns not in Langfuse (see $fail_dir/$sid)"
+                    printf '%s %s %s %s 2\n' "$r_mtime" "$r_size" "$r_ended" "$r_turns" > "$rec_dir/$sid"  # 2: checked, missing; not retried
+                fi
+            fi
+            continue
+        fi
         if [ "$DRY" -eq 1 ]; then
             echo "  $user: would forward $f event=$ev user_id=$lf_user"
             continue
         fi
         payload="$(printf '{"session_id":"%s","transcript_path":"%s","hook_event_name":"%s","reason":"other"}' \
             "$sid" "$f" "$ev")"
-        rc=0
-        ( forward_one "$lf_user" "$payload" "$sid" ) || rc=$?
-        if [ "$rc" -eq 0 ]; then
-            forwarded=$((forwarded + 1)); touch "$seen/$sid"
+        errf="$(mktemp)"; rc=0
+        forward_one "$lf_user" "$payload" "$sid" "$errf" || rc=$?
+        if [ "$rc" -eq 0 ] && [ ! -s "$errf" ]; then
+            forwarded=$((forwarded + 1))
+            ended="$r_ended"; [ "$ev" = SessionEnd ] && ended=1
+            turns="$(hook_turns "$sid" "$f")"
+            printf '%s %s %s %s 0\n' "$mtime" "$size" "$ended" "$turns" > "$rec_dir/$sid"
         else
-            failures=$((failures + 1)); user_failed=1
-            [ "$rc" -eq 124 ] && why="timeout after ${HOOK_TIMEOUT}s" || why="exit $rc"
-            log "hook failed for $user $(basename "$f") ($ev): $why"
+            failures=$((failures + 1))
+            if [ "$rc" -eq 124 ]; then why="timeout after ${HOOK_TIMEOUT}s"
+            elif [ "$rc" -ne 0 ]; then why="exit $rc"
+            else why="stderr: $(head -c 200 "$errf" | tr '\n' ' ')"; fi
+            printf '%s %s %s\n' "$(date -u +%FT%TZ)" "$ev" "$why" > "$fail_dir/$sid"
+            { printf '== %s %s %s %s\n' "$(date -u +%FT%TZ)" "$user" "$sid" "$ev"; cat "$errf"; } >> "$LF_STATE/hook-stderr.log"
+            log "hook failed for $user $sid ($ev): $why"
         fi
+        command rm -f "$errf"
     done < <(find "$scan" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' -print0)
-    # The stamp marks the start of this pass; set it only when every hook ran
-    # clean, so a failed transcript is retried next tick.
-    if [ "$DRY" -eq 0 ]; then
-        if [ "$user_failed" -eq 0 ]; then command mv -f "$stamp.new" "$stamp"; else command rm -f "$stamp.new"; fi
-    fi
 done
 
 [ "$DRY" -eq 0 ] || echo "dry-run: nothing was written and no hook was run."
-log "run done: accounts=$accounts archived=$archived forwarded=$forwarded failures=$failures forwarding=$([ "$FORWARD" -eq 1 ] && echo on || echo off)${DRYFLAG:+ dry-run}"
+log "run done: accounts=$accounts archived=$archived forwarded=$forwarded verified=$verified failures=$failures forwarding=$([ "$FORWARD" -eq 1 ] && echo on || echo off)${DRYFLAG:+ dry-run}"
 [ "$failures" -eq 0 ] && [ "$UNREACHABLE" -eq 0 ]

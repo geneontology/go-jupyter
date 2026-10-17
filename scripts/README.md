@@ -108,9 +108,10 @@ payload, or once with `SessionEnd` after a day of quiet. Per-transcript
 records live under `/var/lib/go-jupyter/langfuse-state/state/<user>/`; the
 hook's own offsets in `langfuse_state.json` next to them. A hook run that
 exits non-zero, runs past 120 s or writes to stderr is a failure: logged,
-not recorded, stderr kept in `langfuse-state/hook-stderr.log`. The tick
-after a successful run asks Langfuse for the last turn's trace once; a miss
-is logged and written under `langfuse-state/failed/<user>/<session>`.
+not recorded, stderr kept in `langfuse-state/hook-stderr.log`. The ticks
+after a successful run ask Langfuse for the last turn's trace; after three
+misses it is logged and written under `langfuse-state/failed/<user>/<session>`
+(a transient error, such as a rate limit, is retried rather than counted).
 
 ```sh
 sudo go-jupyter-trace-sync --dry-run          # what would be archived and forwarded

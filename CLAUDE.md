@@ -71,7 +71,8 @@ this file for the operating rules.
   `/etc/gitconfig` (from `etc/gitconfig`), `/etc/jupyterhub/jupyterhub.env`
   (including the generated `JUPYTERHUB_CRYPT_KEY`), `/etc/default/go-jupyter`
   (backend and `GO_JUPYTER_ALLOWLIST_AUTHORIZATION`), `go-jupyter-trace-sync`, `go-jupyter-redact-transcript` and
-  `go-jupyter-report-marks` with the trace-sync service and timer, `/etc/go-jupyter/langfuse.env` (from
+  `go-jupyter-report-marks` with the trace-sync service and timer, `go-jupyter-session-summary` and the
+  SessionEnd hook that runs it (in the managed settings), `/etc/go-jupyter/langfuse.env` (from
   `langfuse_env_path`; placed by hand on a running box) and the
   `cleanupPeriodDays` key in the managed settings (#28), the system tools the skills call (`runoak` under `/opt/uv-tools`, obo-scripts under
   `/opt/obo-scripts`, and until #74 the `docker`/`robot` stand-ins from `etc/stubs/`) and

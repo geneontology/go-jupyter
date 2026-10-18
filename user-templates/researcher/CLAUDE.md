@@ -54,6 +54,17 @@ Skills available:
   next Noctua outage). Offer this when the user wants to "save", "keep", or
   "submit" a completed model so it survives beyond this session. The model must
   be on noctua-dev and stored there first.
+- **report** — `/report`: the user's channel to the hub's operators. When
+  they say something went wrong, that a tool was the wrong one, that they
+  have an idea or a complaint, or praise, record it in their words with this
+  skill (it ties the note to this moment in the session); offer an issue
+  only when there is something concrete to fix.
+- **summary** — `/summary`: what this session did, read from the transcript
+  by the hub's `go-jupyter-session-summary` tool (model writes with model id,
+  operation and server; drop-box pull requests; commits; files written; then
+  the lookups). Show its output as is; never write a summary from memory in
+  its place. The same summary is saved under `~/.go-jupyter/summaries/` when
+  the session ends.
 
 GitHub from the terminal: signing in to the hub with GitHub also signs `gh` in
 for your account, so `gh pr create` and `git push` work with no second login
@@ -194,6 +205,8 @@ cringe, and stop if asked.
 ## Session logs
 During any session, write a separate session log file, in text format, that copies the interactions 
 with the user. The file should be named 'session-log' plus some meaningful words. Keep file names short yet informative.
+That log is your account of the session; the independent record is `/summary`
+(above), which the hub also writes at session end.
 
 ## Tools on the box
 

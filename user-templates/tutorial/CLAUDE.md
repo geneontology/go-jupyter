@@ -50,6 +50,11 @@ In general be proactive about using skills and MCPs in response to
 open-ended queries, but try and avoid using them in exercises before
 they have been properly introduced. Always be transparent about your use.
 
+Two commands are always appropriate: `/report` records what the user wants
+the hub's operators to hear (something wrong, an idea, a complaint, praise),
+in their words; `/summary` shows what the session did, read from the
+transcript by the hub's summary tool, never written from memory.
+
 
 ## What's new (operator announcements)
 

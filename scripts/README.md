@@ -117,7 +117,7 @@ answering 404 counts as a miss; after three the transcript is logged and
 written under `langfuse-state/failed/<user>/<session>`. Langfuse Cloud
 allows only 5 trace GETs a minute on Hobby (15 on Core, 40 on Pro; ingestion
 has its own far larger bucket), so a run makes at most
-`GO_JUPYTER_MAX_GETS_PER_RUN` (12) of them, `GO_JUPYTER_GET_GAP_SECS` (15)
+`GO_JUPYTER_MAX_GETS_PER_RUN` (4) of them (the fifth within a tick was refused with 429 on 2026-10-18), `GO_JUPYTER_GET_GAP_SECS` (15)
 apart: first per-account trace listings (newest first, up to 10 pages of
 100) for the `GO_JUPYTER_LISTS_PER_RUN` (3) accounts listed longest ago that
 have a look due (`langfuse-state/listed/<user>` is the stamp), each of which

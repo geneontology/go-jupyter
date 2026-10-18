@@ -123,13 +123,33 @@ each generation's input is the whole earlier conversation and one run over a
 long history either exceeds the SDK's request limit or outruns the hook's
 final flush.
 
+The curator's `/report` records (`~/.go-jupyter/reports/*.json`, written by
+the `report` skill in geneontology/go-skills,
+[#25](https://github.com/geneontology/go-jupyter/issues/25)) ride the same
+tick: archived to `/var/lib/go-jupyter/traces/<user>/reports/`, then each new
+record is posted by `go-jupyter-report-marks` as a Langfuse score
+`curator-report` on the trace of the turn it was made in (value = the
+category, comment = the curator's note and the agent's context line, both
+redacted, plus the issue URL if one was filed; metadata = record file, turn
+uuid, skill). The turn is found by walking the archived transcript from the
+record's `turn_uuid` to the user row that started the turn and reading that
+row's number from the hook's state, so no API request is needed; a record
+whose turn the hook has not numbered yet waits for a later tick, and one that
+is still unplaced after a day, or whose turn cannot be found, is scored on
+the session instead. One marker per posted record sits under
+`langfuse-state/reports/<user>/`; the score id is derived from the record's
+file name, so a repeat after a failed flush updates rather than duplicates.
+In Langfuse, filter traces or sessions by the score `curator-report` to find
+them; the score's comment is the curator's text.
+
 ```sh
-sudo go-jupyter-trace-sync --dry-run          # what would be archived and forwarded
+sudo go-jupyter-trace-sync --dry-run          # what would be archived, forwarded and posted
 sudo go-jupyter-trace-sync --user <name>      # one account now
 sudo go-jupyter-trace-sync                    # all accounts now (what the timer runs)
 journalctl -t go-jupyter-trace-sync           # one summary line per run
 ls /var/lib/go-jupyter/traces                 # one directory per account
 ls /var/lib/go-jupyter/langfuse-state/failed/*/   # transcripts with a delivery problem
+ls /var/lib/go-jupyter/langfuse-state/reports/*/  # /report records already posted
 cat /var/lib/go-jupyter/langfuse-state/langfuse_hook.log   # the hook's own log
 ```
 
@@ -142,7 +162,7 @@ hub, which this does not need):
 ```sh
 sudo git -C /opt/go-jupyter pull --ff-only
 sudo /usr/local/bin/uv sync --project /opt/go-jupyter          # adds langfuse to the hub venv
-sudo install -m 0755 /opt/go-jupyter/scripts/go-jupyter-trace-sync /opt/go-jupyter/scripts/go-jupyter-redact-transcript /usr/local/sbin/
+sudo install -m 0755 /opt/go-jupyter/scripts/go-jupyter-trace-sync /opt/go-jupyter/scripts/go-jupyter-redact-transcript /opt/go-jupyter/scripts/go-jupyter-report-marks /usr/local/sbin/
 sudo install -m 0644 /opt/go-jupyter/systemd/go-jupyter-trace-sync.service /opt/go-jupyter/systemd/go-jupyter-trace-sync.timer /etc/systemd/system/
 sudo install -d -m 0700 /var/lib/go-jupyter/traces /var/lib/go-jupyter/langfuse-state
 sudo install -m 0600 <the operator's langfuse env file> /etc/go-jupyter/langfuse.env
@@ -171,7 +191,7 @@ To run it elsewhere than the box (a laptop test against directories you
 own), set `GO_JUPYTER_ACCOUNTS="<name> ..."`, which bypasses `getent` and the
 root check, with `GO_JUPYTER_HOME_ROOT`, `GO_JUPYTER_TRACE_ROOT`,
 `GO_JUPYTER_LF_STATE`, `GO_JUPYTER_PYTHON`, `GO_JUPYTER_HOOK`,
-`GO_JUPYTER_REDACT`, `GO_JUPYTER_LANGFUSE_ENV`, `GO_JUPYTER_GITHUB_ALLOWLIST`,
+`GO_JUPYTER_REDACT`, `GO_JUPYTER_REPORT_MARKS`, `GO_JUPYTER_LANGFUSE_ENV`, `GO_JUPYTER_GITHUB_ALLOWLIST`,
 `GO_JUPYTER_LOCK` and `GO_JUPYTER_QUIET_SECS` pointing at your own paths (see
 the script header).
 

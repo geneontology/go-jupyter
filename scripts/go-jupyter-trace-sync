@@ -38,6 +38,15 @@
 #             allowlist, else local:<host>:<user>. Tags: box:<host>, plus the
 #             hook's own (claude-code, skill:<name>). Trace ids are
 #             sha256("<session>:<turn>")[:32] (CC_LANGFUSE_TRACE_SEED).
+#   reports:  ~/.go-jupyter/reports/ (what the /report skill writes, one JSON
+#             file per report, #25) -> /var/lib/go-jupyter/traces/<user>/
+#             reports/, same rsync; then, when forwarding is on,
+#             go-jupyter-report-marks posts each new record as a Langfuse
+#             score "curator-report" (value = category, comment = the
+#             curator's note, redacted) on the trace of the turn it was made
+#             in, one marker per posted record under <state dir>/reports/
+#             <user>/. A record whose turn is not forwarded yet waits for the
+#             next tick; see the helper's header for the fallbacks.
 #
 # Delivery checks. The hook is fail-open: an export it cannot deliver is
 # reported on its stderr while its offset still advances, so (1) nothing is
@@ -62,6 +71,7 @@
 #   GO_JUPYTER_PYTHON (/opt/go-jupyter/.venv/bin/python)
 #   GO_JUPYTER_HOOK (/opt/go-jupyter/vendor/langfuse/langfuse_hook.py)
 #   GO_JUPYTER_REDACT (/usr/local/sbin/go-jupyter-redact-transcript)
+#   GO_JUPYTER_REPORT_MARKS (/usr/local/sbin/go-jupyter-report-marks)
 #   GO_JUPYTER_LANGFUSE_ENV (/etc/go-jupyter/langfuse.env)
 #   GO_JUPYTER_GITHUB_ALLOWLIST (/etc/jupyterhub/github_allowed_users.txt)
 #   GO_JUPYTER_LOCK (/run/go-jupyter-trace-sync.lock)
@@ -80,6 +90,7 @@ LF_STATE="${GO_JUPYTER_LF_STATE:-/var/lib/go-jupyter/langfuse-state}"
 PYTHON="${GO_JUPYTER_PYTHON:-/opt/go-jupyter/.venv/bin/python}"
 HOOK="${GO_JUPYTER_HOOK:-/opt/go-jupyter/vendor/langfuse/langfuse_hook.py}"
 REDACT="${GO_JUPYTER_REDACT:-/usr/local/sbin/go-jupyter-redact-transcript}"
+REPORT_MARKS="${GO_JUPYTER_REPORT_MARKS:-/usr/local/sbin/go-jupyter-report-marks}"
 LF_ENV="${GO_JUPYTER_LANGFUSE_ENV:-/etc/go-jupyter/langfuse.env}"
 ALLOWLIST="${GO_JUPYTER_GITHUB_ALLOWLIST:-/etc/jupyterhub/github_allowed_users.txt}"
 LOCK="${GO_JUPYTER_LOCK:-/run/go-jupyter-trace-sync.lock}"
@@ -139,7 +150,7 @@ if [ ! -r "$LF_ENV" ]; then
     log "forwarding off: no readable $LF_ENV (archive only)"
 fi
 if [ "$DRY" -eq 0 ]; then
-    install -d -m 0700 "$TRACE_ROOT" "$LF_STATE" "$LF_STATE/state" "$LF_STATE/failed"
+    install -d -m 0700 "$TRACE_ROOT" "$LF_STATE" "$LF_STATE/state" "$LF_STATE/failed" "$LF_STATE/reports"
 fi
 
 # Every function below that reads the env file runs as a subshell (parenthesised
@@ -187,6 +198,20 @@ forward_one() (
         CC_LANGFUSE_TRACE_SEED="$3" CC_LANGFUSE_MAX_CHARS=6000 \
         LANGFUSE_FLUSH_AT=8 LANGFUSE_FLUSH_INTERVAL=0.5 LANGFUSE_OTEL_COMPRESSION=gzip
     printf '%s' "$2" | timeout "$HOOK_TIMEOUT" "$PYTHON" -I "$HOOK" >/dev/null 2>"$4" 9>&-
+)
+
+# mark_reports <user id> <archived reports dir> <mirror> <markers dir>: post
+# the account's new /report records as scores (go-jupyter-report-marks, which
+# needs no GET request). Prints the helper's lines; exit status is its own.
+mark_reports() (
+    set +x
+    set -a
+    # shellcheck disable=SC1090
+    . "$LF_ENV"
+    set +a
+    timeout 60 "$PYTHON" -I "$REPORT_MARKS" --user "$1" --reports "$2" --mirror "$3" \
+        --state-file "$LF_STATE/langfuse_state.json" --sent-dir "$4" --redactor "$REDACT" \
+        --max-age-secs "$QUIET_SECS" $DRYFLAG 9>&-
 )
 
 # import_sliced <user id> <mirror path> <session id> <stderr file>: a never-seen
@@ -253,7 +278,7 @@ lf_list_ids() (
 # trace_id <session id> <turn>: the deterministic trace id the hook uses.
 trace_id() { printf '%s:%s' "$1" "$2" | sha256sum | cut -c1-32; }
 
-accounts=0; archived=0; forwarded=0; failures=0; verified=0; checks=0; throttled=0; lists=0
+accounts=0; archived=0; forwarded=0; failures=0; verified=0; checks=0; throttled=0; lists=0; reports=0
 for user in "${TARGETS[@]}"; do
     home="$(home_of "$user")"
     src="$home/.claude/projects"
@@ -289,6 +314,18 @@ for user in "${TARGETS[@]}"; do
     esac
     archived=$((archived + n))
     [ "$DRY" -eq 0 ] || echo "  $user: would archive $n transcript(s) to $arch/projects/"
+
+    # 1b. The curator's /report records, the same way (a symlinked
+    #     ~/.go-jupyter or reports/ is refused, like ~/.claude above).
+    reports_src="$home/.go-jupyter/reports"; reports_dir="$arch/reports"
+    if [ -d "$reports_src" ] && [ ! -L "$home/.go-jupyter" ] && [ ! -L "$reports_src" ]; then
+        [ "$DRY" -eq 1 ] || install -d -m 0700 "$arch/reports"
+        rsync -rlt --safe-links --no-owner --no-group $DRYFLAG "$reports_src/" "$arch/reports/" >/dev/null 2>&1 \
+            || log "rsync of $reports_src failed (exit $?); the records are retried next run"
+        [ "$DRY" -eq 0 ] || reports_dir="$reports_src"   # a dry run reads the records in place
+    elif [ -L "$home/.go-jupyter" ] || [ -L "$reports_src" ]; then
+        log "skip reports of $user: $reports_src or a parent is a symlink"
+    fi
 
     [ "$FORWARD" -eq 1 ] || continue
     if [ ! -d "$arch/projects" ]; then
@@ -429,8 +466,24 @@ for user in "${TARGETS[@]}"; do
         command rm -f "$errf"
     done < <(find "$scan" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' -print0)
     [ -z "$ids_file" ] || command rm -f "$ids_file"
+
+    # 4. /report records: every archived record without a marker becomes a
+    #    score on its turn's trace (after this run's forwarding, so a report
+    #    made in the last turn finds its turn numbered). Nothing here reads
+    #    from the API.
+    if [ -d "$reports_dir" ] && [ -n "$(ls -A "$reports_dir" 2>/dev/null)" ]; then
+        marks_out="$(mktemp)"; rc=0
+        mark_reports "$lf_user" "$reports_dir" "$mirror" "$LF_STATE/reports/$user" >"$marks_out" 2>&1 || rc=$?
+        cat "$marks_out"
+        n="$(grep -c ': posted ' "$marks_out" || true)"; reports=$((reports + n))
+        if [ "$rc" -ne 0 ]; then
+            failures=$((failures + 1))
+            log "report marks failed for $user (exit $rc): $(grep -m1 -E 'failed|Error|error' "$marks_out" | head -c 200)"
+        fi
+        command rm -f "$marks_out"
+    fi
 done
 
 [ "$DRY" -eq 0 ] || echo "dry-run: nothing was written and no hook was run."
-log "run done: accounts=$accounts archived=$archived forwarded=$forwarded listed=$lists checked=$checks verified=$verified failures=$failures forwarding=$([ "$FORWARD" -eq 1 ] && echo on || echo off)${DRYFLAG:+ dry-run}"
+log "run done: accounts=$accounts archived=$archived forwarded=$forwarded reports=$reports listed=$lists checked=$checks verified=$verified failures=$failures forwarding=$([ "$FORWARD" -eq 1 ] && echo on || echo off)${DRYFLAG:+ dry-run}"
 [ "$failures" -eq 0 ] && [ "$UNREACHABLE" -eq 0 ]

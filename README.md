@@ -222,7 +222,7 @@ cloud-init (never committed, never in the repo's history):
   a direct GET of the trace that answers 404 is a miss; after three misses
   the transcript is listed under `langfuse-state/failed/<user>/`. Looks are
   paid from Langfuse Cloud's small trace GET bucket (5 a minute on Hobby),
-  so a tick makes at most four, 15 s apart: per-account trace listings for
+  so a tick makes at most twelve, 15 s apart: per-account trace listings for
   the three accounts listed longest ago that have a look due, which settle
   every record they contain, then direct GETs for the rest. Every generation carries
   the whole earlier conversation as its input, so a long transcript's spans
@@ -250,6 +250,17 @@ cloud-init (never committed, never in the repo's history):
   file included) is readable by any account on the box through the instance
   metadata service; that is a pre-existing property of the box tracked
   separately, and the reason the env file is better placed by hand.
+- **Session summaries (#29, October 2026).** `go-jupyter-session-summary`
+  (in `/usr/local/bin`, runs as the curator) turns a session's transcript
+  into a Markdown record of what was done: model writes with id, operation
+  and server, GitHub writes, commits and pushes, files written, `/report`
+  records, then the lookups, each with its time and whether it failed, and
+  the transcript's sha256 so an operator can match it against the archive.
+  It reads tool calls and results, not the agent's narration. The managed
+  settings run it at session end (`~/.go-jupyter/summaries/<session>.md`),
+  and the `/summary` skill in go-skills runs it on demand. Adding the hook
+  to a running box is a by-hand edit of `/etc/claude-code/managed-settings.json`
+  (`scripts/README.md`).
 - **Replacing the box (blue/green).** Bring up a second stack from a separate
   Terraform state with the same `fronting` and hostname, verify it, then on the
   new box run `go-jupyter-migrate <old-host>` (see the script header for the

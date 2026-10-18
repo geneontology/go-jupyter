@@ -62,13 +62,18 @@ npm install -g @anthropic-ai/claude-code configurable-http-proxy
 #   * cleanupPeriodDays: Claude Code deletes transcripts under ~/.claude/projects
 #     after 30 days by default; ten years keeps them for the archive that
 #     go-jupyter-trace-sync takes (#28).
+#   * hooks.SessionEnd: go-jupyter-session-summary writes the session's
+#     summary (what was changed, what was looked up) under
+#     ~/.go-jupyter/summaries/ when a session ends (#29); the default
+#     SessionEnd budget is 1.5 s, hence the explicit timeout (seconds).
 # NOTE: this file is only written at first boot. To change it on a running
 # box, edit /etc/claude-code/managed-settings.json in place as well; editing
 # only this template changes user_data, which Terraform treats as an instance
 # replacement (blocked by prevent_destroy).
 mkdir -p /etc/claude-code
 cat > /etc/claude-code/managed-settings.json <<'MANAGED_SETTINGS_EOF'
-{"autoUpdatesDisabled": true, "fallbackModel": ["sonnet"], "cleanupPeriodDays": 3650}
+{"autoUpdatesDisabled": true, "fallbackModel": ["sonnet"], "cleanupPeriodDays": 3650,
+ "hooks": {"SessionEnd": [{"hooks": [{"type": "command", "command": "go-jupyter-session-summary --write --quiet --from-hook", "timeout": 30}]}]}}
 MANAGED_SETTINGS_EOF
 
 # uv, system-wide.
@@ -402,6 +407,9 @@ systemctl enable --now go-jupyter-update-claude.timer
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-trace-sync" /usr/local/sbin/go-jupyter-trace-sync
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-redact-transcript" /usr/local/sbin/go-jupyter-redact-transcript
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-report-marks" /usr/local/sbin/go-jupyter-report-marks
+# Session summaries (#29): run by curators (/summary) and by the SessionEnd
+# hook in the managed settings above; reads the transcript only.
+install -m 0755 "$REPO_DIR/scripts/go-jupyter-session-summary" /usr/local/bin/go-jupyter-session-summary
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-trace-sync.service" /etc/systemd/system/go-jupyter-trace-sync.service
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-trace-sync.timer" /etc/systemd/system/go-jupyter-trace-sync.timer
 install -d -m 0700 /var/lib/go-jupyter/traces /var/lib/go-jupyter/langfuse-state

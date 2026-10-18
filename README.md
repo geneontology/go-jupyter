@@ -215,12 +215,16 @@ cloud-init (never committed, never in the repo's history):
   The hook is fail-open (an export it cannot deliver is reported on its
   stderr while its offset still advances), so the script treats a hook run
   with anything on stderr, a non-zero exit or a 120 s timeout as a failure,
-  does not record it, and logs the reason; and the ticks after a successful
-  run check that the last turn's trace (ids are
-  `sha256("<session>:<turn>")[:32]`) appears in a listing of the account's
-  traces, at most three accounts per tick because Langfuse Cloud's trace GET
-  bucket is tiny (5 a minute on Hobby), listing a transcript under
-  `langfuse-state/failed/<user>/` after three misses. Every generation carries
+  does not record it, and logs the reason; and later ticks look for the last
+  turn's trace (ids are `sha256("<session>:<turn>")[:32]`): the first look
+  half an hour after the forward, because ingestion is asynchronous and lags
+  for minutes after an outage, the next half an hour after a miss, and only
+  a direct GET of the trace that answers 404 is a miss; after three misses
+  the transcript is listed under `langfuse-state/failed/<user>/`. Looks are
+  paid from Langfuse Cloud's small trace GET bucket (5 a minute on Hobby),
+  so a tick makes at most twelve, 15 s apart: per-account trace listings for
+  the three accounts listed longest ago that have a look due, which settle
+  every record they contain, then direct GETs for the rest. Every generation carries
   the whole earlier conversation as its input, so a long transcript's spans
   grow with its length; a transcript over 1 MB that has never been forwarded
   is therefore shown to the hook in slices of 300 lines, text fields are

@@ -108,15 +108,23 @@ payload, or once with `SessionEnd` after a day of quiet. Per-transcript
 records live under `/var/lib/go-jupyter/langfuse-state/state/<user>/`; the
 hook's own offsets in `langfuse_state.json` next to them. A hook run that
 exits non-zero, runs past 120 s or writes to stderr is a failure: logged,
-not recorded, stderr kept in `langfuse-state/hook-stderr.log`. The ticks
-after a successful run ask Langfuse for the last turn's trace; after three
-misses it is logged and written under `langfuse-state/failed/<user>/<session>`
-(from one listing of the account's traces per tick rather than one request
-per transcript: Langfuse Cloud allows only 5 trace GETs a minute on Hobby, 15
-on Core, 40 on Pro, while ingestion has its own far larger bucket; a run
-lists at most three accounts, `GO_JUPYTER_LISTS_PER_RUN`, 15 s apart, and a
-refused listing pauses the checks for that run, so a backlog drains over the
-following ticks).
+not recorded, stderr kept in `langfuse-state/hook-stderr.log`. Later ticks
+look for the last turn's trace: the first look `GO_JUPYTER_LOOK_GAP_SECS`
+(1800) after the forward, since Langfuse ingests asynchronously and lagged
+by more than a quarter of an hour after an outage on 2026-10-18, the next
+one the same gap after a miss, and only a direct `GET /api/public/traces/<id>`
+answering 404 counts as a miss; after three the transcript is logged and
+written under `langfuse-state/failed/<user>/<session>`. Langfuse Cloud
+allows only 5 trace GETs a minute on Hobby (15 on Core, 40 on Pro; ingestion
+has its own far larger bucket), so a run makes at most
+`GO_JUPYTER_MAX_GETS_PER_RUN` (12) of them, `GO_JUPYTER_GET_GAP_SECS` (15)
+apart: first per-account trace listings (newest first, up to 10 pages of
+100) for the `GO_JUPYTER_LISTS_PER_RUN` (3) accounts listed longest ago that
+have a look due (`langfuse-state/listed/<user>` is the stamp), each of which
+settles every due record it contains, then direct GETs for the due records
+that remain. A refused request (429, 5xx, no connection) pauses looks for
+that run; a record with no turn to look for (`turns=0`) is left alone and
+holds no slot. A backlog drains over the following ticks.
 A transcript over 1 MB that has never been forwarded is imported in slices of
 300 lines (`GO_JUPYTER_CHUNK_MIN_BYTES`, `GO_JUPYTER_CHUNK_LINES`), because
 each generation's input is the whole earlier conversation and one run over a
@@ -202,7 +210,9 @@ root check, with `GO_JUPYTER_HOME_ROOT`, `GO_JUPYTER_TRACE_ROOT`,
 `GO_JUPYTER_LF_STATE`, `GO_JUPYTER_PYTHON`, `GO_JUPYTER_HOOK`,
 `GO_JUPYTER_REDACT`, `GO_JUPYTER_REPORT_MARKS`, `GO_JUPYTER_LANGFUSE_ENV`, `GO_JUPYTER_GITHUB_ALLOWLIST`,
 `GO_JUPYTER_LOCK` and `GO_JUPYTER_QUIET_SECS` pointing at your own paths (see
-the script header).
+the script header); `GO_JUPYTER_LOOK_GAP_SECS=0` makes every unverified
+record due at once. Mind that a laptop test shares the project's GET bucket
+with the box's tick: a 429 on either side only pauses that run's looks.
 
 ## go-jupyter-git-identity — commit identity from the GitHub profile
 

@@ -57,10 +57,19 @@
 # exit 1); (2) a hook run that exits non-zero, times out, or writes anything
 # to stderr counts as a failure, the record is not updated, and the reason is
 # logged; (3) after a successful run the record holds the hook's turn count,
-# and the next tick asks Langfuse for that turn's trace once; a miss is logged
-# and listed under <state dir>/failed/<user>/<session> for an operator. Turns
-# the hook has already advanced past cannot be re-sent by this script alone:
-# see scripts/README.md, "Re-sending".
+# and later ticks look for that turn's trace in Langfuse: the first look
+# LOOK_GAP_SECS after the forward (ingestion is asynchronous and lags for
+# minutes after an outage), the next LOOK_GAP_SECS after a miss, and only a
+# direct GET of the trace id that answers 404 is a miss; after three misses
+# the transcript is logged and listed under <state dir>/failed/<user>/
+# <session> for an operator. Looks are paid for from Langfuse Cloud's small
+# GET bucket (5 a minute on Hobby), so a run makes at most MAX_GETS_PER_RUN
+# of them, GET_GAP_SECS apart: per-account trace listings (newest first, up
+# to 10 pages of 100) for the LISTS_PER_RUN accounts listed longest ago that
+# have a look due, which settle every record they contain for free, then
+# direct GETs for the rest of the due records. Turns the hook has already
+# advanced past cannot be re-sent by this script alone: see
+# scripts/README.md, "Re-sending".
 #
 # Overlapping runs skip (flock). The hook's own log is
 # <state dir>/langfuse_hook.log; its stderr goes to <state dir>/hook-stderr.log.
@@ -80,6 +89,8 @@
 #   GO_JUPYTER_LOCK (/run/go-jupyter-trace-sync.lock)
 #   GO_JUPYTER_QUIET_SECS (86400)
 #   GO_JUPYTER_CHUNK_MIN_BYTES (1048576)   GO_JUPYTER_CHUNK_LINES (300)
+#   GO_JUPYTER_LOOK_GAP_SECS (1800)   GO_JUPYTER_LISTS_PER_RUN (3)
+#   GO_JUPYTER_MAX_GETS_PER_RUN (12)   GO_JUPYTER_GET_GAP_SECS (15)
 #   GO_JUPYTER_ACCOUNTS: space-separated account names with homes under
 #       GO_JUPYTER_HOME_ROOT/<name>; bypasses getent and lifts the root
 #       requirement, for a local test against directories you own.
@@ -102,8 +113,10 @@ QUIET_SECS="${GO_JUPYTER_QUIET_SECS:-86400}"
 CHUNK_MIN_BYTES="${GO_JUPYTER_CHUNK_MIN_BYTES:-1048576}"   # first import in slices above this size
 CHUNK_LINES="${GO_JUPYTER_CHUNK_LINES:-300}"               # lines per slice
 HOOK_TIMEOUT=120
-LISTS_PER_RUN="${GO_JUPYTER_LISTS_PER_RUN:-3}"   # per-account trace listings per tick (see below)
-LIST_GAP_SECS=15                                   # between listings: the GET bucket is 5/min on Hobby
+LOOK_GAP_SECS="${GO_JUPYTER_LOOK_GAP_SECS:-1800}"       # forward -> first look, and miss -> next look
+LISTS_PER_RUN="${GO_JUPYTER_LISTS_PER_RUN:-3}"          # per-account trace listings per tick
+MAX_GETS_PER_RUN="${GO_JUPYTER_MAX_GETS_PER_RUN:-12}"   # listing pages + direct trace GETs per tick
+GET_GAP_SECS="${GO_JUPYTER_GET_GAP_SECS:-15}"           # between GETs: the bucket is 5/min on Hobby
 
 log() { logger -t go-jupyter-trace-sync -- "$*"; echo "$*"; }
 usage() { echo "usage: sudo go-jupyter-trace-sync [--all | --user <name>] [--dry-run]" >&2; exit 2; }
@@ -153,7 +166,7 @@ if [ ! -r "$LF_ENV" ]; then
     log "forwarding off: no readable $LF_ENV (archive only)"
 fi
 if [ "$DRY" -eq 0 ]; then
-    install -d -m 0700 "$TRACE_ROOT" "$LF_STATE" "$LF_STATE/state" "$LF_STATE/failed" "$LF_STATE/reports"
+    install -d -m 0700 "$TRACE_ROOT" "$LF_STATE" "$LF_STATE/state" "$LF_STATE/failed" "$LF_STATE/reports" "$LF_STATE/listed"
 fi
 
 # Every function below that reads the env file runs as a subshell (parenthesised
@@ -255,33 +268,68 @@ except Exception:
 PY
 }
 
-# lf_list_ids <user id> <out file>: the ids of up to 1000 of that user's
-# traces (10 pages of 100) into <out file>; prints the last HTTP status.
-lf_list_ids() (
+# lf_get <path> <out file>: one authenticated GET with the body saved;
+# prints the HTTP status (000 when curl could not connect).
+lf_get() (
     set +x
     set -a
     # shellcheck disable=SC1090
     . "$LF_ENV"
     set +a
-    local page code
-    : > "$2"
-    for page in 1 2 3 4 5 6 7 8 9 10; do
-        [ "$page" -eq 1 ] || sleep "$LIST_GAP_SECS"   # pages count against the same small bucket
-        code="$(printf 'user = "%s:%s"\n' "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" \
-            | curl -s -m 30 -o "$2.page" -w '%{http_code}' --config - \
-              "${LANGFUSE_BASE_URL%/}/api/public/traces?userId=$1&limit=100&page=$page" 9>&-)" || code=000
-        [ "$code" = 200 ] || { command rm -f "$2.page"; echo "$code"; exit 0; }
-        n="$("$PYTHON" -I -c 'import json,sys; d=json.load(open(sys.argv[1])); ids=[t["id"] for t in d.get("data",[])]; print("\n".join(ids)); sys.stderr.write(str(len(ids)))' "$2.page" 2>&1 >>"$2" | tail -c 8)"
-        command rm -f "$2.page"
-        [ "${n:-0}" -ge 100 ] || break
-    done
-    echo 200
+    printf 'user = "%s:%s"\n' "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" \
+        | curl -s -m 30 -o "$2" -w '%{http_code}' --config - "${LANGFUSE_BASE_URL%/}$1" 9>&- || echo 000
 )
+
+# pace: wait so that consecutive GETs are GET_GAP_SECS apart, and count one.
+gets=0; last_get=0
+pace() {
+    local t wait
+    t="$(date +%s)"; wait=$((GET_GAP_SECS - (t - last_get)))
+    [ "$wait" -le 0 ] || sleep "$wait"
+    last_get="$(date +%s)"; gets=$((gets + 1))
+}
+
+# due_records <record dir>: the session ids of records with a look due: a
+# turn to look for, not yet seen (0) or missed fewer than three times (-1,
+# -2), and last written (forwarded or looked at) at least LOOK_GAP_SECS ago.
+due_records() {
+    [ -d "$1" ] || return 0
+    find "$1" -maxdepth 1 -type f -printf '%T@ %p\n' 2>/dev/null \
+        | awk -v cutoff="$((now - LOOK_GAP_SECS))" 'int($1) <= cutoff { print $2 }' \
+        | xargs -r awk '$4 > 0 && $5 <= 0 && $5 > -3 { print FILENAME }' | xargs -r -n1 basename
+}
+
+# page_ids <page file> <ids file>: append the page's trace ids; print totalPages.
+page_ids() {
+    "$PYTHON" -I - "$1" "$2" <<'PY' 2>/dev/null || echo 1
+import json, sys
+d = json.load(open(sys.argv[1]))
+with open(sys.argv[2], "a") as out:
+    for t in d.get("data", []):
+        out.write(str(t["id"]) + "\n")
+print(int((d.get("meta") or {}).get("totalPages") or 1))
+PY
+}
 
 # trace_id <session id> <turn>: the deterministic trace id the hook uses.
 trace_id() { printf '%s:%s' "$1" "$2" | sha256sum | cut -c1-32; }
 
 accounts=0; archived=0; forwarded=0; failures=0; verified=0; checks=0; throttled=0; lists=0; reports=0
+now="$(date +%s)"
+
+# Accounts whose traces are listed this run: those with a look due, the ones
+# listed longest ago first (<state>/listed/<user> is touched after a listing),
+# at most LISTS_PER_RUN. The rest of the due records get direct GETs.
+LIST_SET=" "
+if [ "$DRY" -eq 0 ] && [ "$FORWARD" -eq 1 ]; then
+    for user in "${TARGETS[@]}"; do
+        [ -n "$(due_records "$LF_STATE/state/$user")" ] || continue
+        stamp=0; [ ! -f "$LF_STATE/listed/$user" ] || stamp="$(stat -c %Y "$LF_STATE/listed/$user")"
+        printf '%s %s\n' "$stamp" "$user"
+    done | sort -n | head -n "$LISTS_PER_RUN" | while read -r _ user; do printf '%s ' "$user"; done > "$LF_STATE/.list-set"
+    LIST_SET=" $(cat "$LF_STATE/.list-set") "; command rm -f "$LF_STATE/.list-set"
+fi
+
 for user in "${TARGETS[@]}"; do
     home="$(home_of "$user")"
     src="$home/.claude/projects"
@@ -383,33 +431,37 @@ for user in "${TARGETS[@]}"; do
     rec_dir="$LF_STATE/state/$user"; fail_dir="$LF_STATE/failed/$user"
     [ "$DRY" -eq 1 ] || install -d -m 0700 "$rec_dir" "$fail_dir"
     scan="$mirror"; [ -d "$scan" ] || scan="$arch/projects"
-    now="$(date +%s)"
-    # One listing of the account's traces serves every delivery check below.
-    # Langfuse Cloud's GET bucket for traces is small (5 requests a minute
-    # on Hobby, 15 on Core, 40 on Pro; the ingestion bucket is separate and
-    # far larger), so a run lists at most LISTS_PER_RUN accounts, LIST_GAP_SECS
-    # apart, and only accounts with something to check; a backlog drains over
-    # ticks. A refused listing pauses checks for the run.
+    # One listing of the account's traces (newest first, up to 10 pages of
+    # 100, GET_GAP_SECS apart) settles every due record it contains; the
+    # listing is skipped once the run's GET budget is spent, and a refused
+    # page (429, 5xx, no connection) pauses looks for the rest of the run.
     ids_file=""
-    if [ "$DRY" -eq 0 ] && [ "$throttled" -eq 0 ] && [ "$lists" -lt "$LISTS_PER_RUN" ] \
-        && grep -lqs -E ' (0|-1|-2)$' "$rec_dir"/* 2>/dev/null; then
-        [ "$lists" -eq 0 ] || sleep "$LIST_GAP_SECS"
-        lists=$((lists + 1))
-        ids_file="$(mktemp)"
-        code="$(lf_list_ids "$lf_user" "$ids_file")"
-        if [ "$code" != 200 ]; then
-            throttled=1; command rm -f "$ids_file"; ids_file=""
-            echo "  delivery checks paused this run: Langfuse answered HTTP $code"
-        fi
-    fi
+    case "$LIST_SET" in *" $user "*)
+        if [ "$throttled" -eq 0 ] && [ "$gets" -lt "$MAX_GETS_PER_RUN" ]; then
+            lists=$((lists + 1)); ids_file="$(mktemp)"; page=1
+            while :; do
+                pace
+                code="$(lf_get "/api/public/traces?userId=$lf_user&limit=100&page=$page" "$ids_file.page")"
+                if [ "$code" != 200 ]; then
+                    throttled=1; command rm -f "$ids_file.page" "$ids_file"; ids_file=""
+                    echo "  looks paused this run: Langfuse answered HTTP $code to a listing"; break
+                fi
+                pages="$(page_ids "$ids_file.page" "$ids_file")"; command rm -f "$ids_file.page"
+                touch "$LF_STATE/listed/$user"
+                [ "$page" -lt "$pages" ] && [ "$page" -lt 10 ] && [ "$gets" -lt "$MAX_GETS_PER_RUN" ] || break
+                page=$((page + 1))
+            done
+        fi ;;
+    esac
     while IFS= read -r -d '' f; do
         case "$f" in *'"'* | *\\* | *$'\n'* | *$'\r'*)
             echo "  skip $f: quote, backslash or newline in path"; continue ;; esac
         sid="$(basename "$f" .jsonl)"
         mtime="$(stat -c %Y "$f")"; size="$(stat -c %s "$f")"
-        r_mtime=""; r_size=""; r_ended=0; r_turns=0; r_verified=0
+        r_mtime=""; r_size=""; r_ended=0; r_turns=0; r_verified=0; r_written=0
         if [ -f "$rec_dir/$sid" ]; then
             read -r r_mtime r_size r_ended r_turns r_verified < "$rec_dir/$sid" || true
+            r_written="$(stat -c %Y "$rec_dir/$sid")"
         fi
         changed=1; [ "$mtime" = "$r_mtime" ] && [ "$size" = "$r_size" ] && changed=0
         ev=""
@@ -417,23 +469,28 @@ for user in "${TARGETS[@]}"; do
         elif [ "${r_ended:-0}" -eq 0 ] && [ $((now - mtime)) -gt "$QUIET_SECS" ]; then ev=SessionEnd
         fi
         if [ -z "$ev" ]; then
-            # Nothing new. Delivery check on the last forwarded turn: the
-            # verified field is 1 once seen, 0 not yet looked, -N after N
-            # looks that did not find it in the account's trace listing
-            # (one request per account per tick, up to 1000 traces); listed
-            # under failed/ at -3 and left there. A listing the API refuses
-            # (429, 5xx, no connection) is not a look: records stay as they
-            # are and the run stops checking.
-            if [ "$DRY" -eq 0 ] && [ -n "$ids_file" ] \
-                && [ "${r_verified:-0}" -le 0 ] && [ "${r_verified:-0}" -gt -3 ] && [ "${r_turns:-0}" -gt 0 ]; then
-                checks=$((checks + 1))
-                if grep -qxF "$(trace_id "$sid" "$r_turns")" "$ids_file"; then code=200; else code=404; fi
+            # Nothing new. A look at the last forwarded turn when one is due
+            # (verified 0 = not yet seen, -N = N misses; a look LOOK_GAP_SECS
+            # after the record was last written): found in this run's listing
+            # of the account, or else one direct GET of the trace while the
+            # run's budget lasts. Only a 404 is a miss; the third miss is
+            # logged and listed under failed/, and a record with no turn to
+            # look for is left alone.
+            if [ "$DRY" -eq 0 ] && [ "$throttled" -eq 0 ] \
+                && [ "${r_verified:-0}" -le 0 ] && [ "${r_verified:-0}" -gt -3 ] && [ "${r_turns:-0}" -gt 0 ] \
+                && [ $((now - r_written)) -ge "$LOOK_GAP_SECS" ]; then
+                tid="$(trace_id "$sid" "$r_turns")"; code=""
+                if [ -n "$ids_file" ] && grep -qxF "$tid" "$ids_file"; then code=200
+                elif [ "$gets" -lt "$MAX_GETS_PER_RUN" ]; then
+                    pace; code="$(lf_get "/api/public/traces/$tid" /dev/null)"
+                fi
+                [ -n "$code" ] || continue   # budget spent: next run
                 case "$code" in
                     200)
-                        verified=$((verified + 1)); command rm -f "$fail_dir/$sid"
+                        checks=$((checks + 1)); verified=$((verified + 1)); command rm -f "$fail_dir/$sid"
                         printf '%s %s %s %s 1\n' "$r_mtime" "$r_size" "$r_ended" "$r_turns" > "$rec_dir/$sid" ;;
                     404)
-                        n=$(( ${r_verified:-0} - 1 ))
+                        checks=$((checks + 1)); n=$(( ${r_verified:-0} - 1 ))
                         printf '%s %s %s %s %s\n' "$r_mtime" "$r_size" "$r_ended" "$r_turns" "$n" > "$rec_dir/$sid"
                         if [ "$n" -le -3 ]; then
                             failures=$((failures + 1))
@@ -442,7 +499,7 @@ for user in "${TARGETS[@]}"; do
                         fi ;;
                     *)
                         throttled=1
-                        echo "  delivery checks paused this run: Langfuse answered HTTP $code" ;;
+                        echo "  looks paused this run: Langfuse answered HTTP $code" ;;
                 esac
             fi
             continue
@@ -499,5 +556,5 @@ for user in "${TARGETS[@]}"; do
 done
 
 [ "$DRY" -eq 0 ] || echo "dry-run: nothing was written and no hook was run."
-log "run done: accounts=$accounts archived=$archived forwarded=$forwarded reports=$reports listed=$lists checked=$checks verified=$verified failures=$failures forwarding=$([ "$FORWARD" -eq 1 ] && echo on || echo off)${DRYFLAG:+ dry-run}"
+log "run done: accounts=$accounts archived=$archived forwarded=$forwarded reports=$reports listed=$lists gets=$gets checked=$checks verified=$verified failures=$failures forwarding=$([ "$FORWARD" -eq 1 ] && echo on || echo off)${DRYFLAG:+ dry-run}"
 [ "$failures" -eq 0 ] && [ "$UNREACHABLE" -eq 0 ]

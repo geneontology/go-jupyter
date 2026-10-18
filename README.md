@@ -182,7 +182,7 @@ cloud-init (never committed, never in the repo's history):
   open browser tab keeps fresh by polling.
 - **Session traces: archive, redaction and Langfuse (since #28, October 2026).**
   Every five minutes `go-jupyter-trace-sync.timer` runs `go-jupyter-trace-sync`
-  as root. Three steps per seeded account. (1) Archive: rsync of
+  as root. Four steps per seeded account. (1) Archive: rsync of
   `~/.claude/projects/` (the Claude Code transcripts, subagent transcripts
   included) into `/var/lib/go-jupyter/traces/<user>/projects/`, root-only,
   never deleted from, in-tree symlinks only; an account whose `~/.claude` or
@@ -226,9 +226,18 @@ cloud-init (never committed, never in the repo's history):
   is therefore shown to the hook in slices of 300 lines, text fields are
   capped at 6000 characters, and export batches are small and compressed. Turns the hook has advanced past are not
   re-sent by the script alone: see `scripts/README.md`, "Re-sending".
+  (4) Reports: what a curator tells the `/report` skill (go-skills; one JSON
+  record per report under `~/.go-jupyter/reports/`, #25) is archived next to
+  the transcripts and posted by `go-jupyter-report-marks` as a Langfuse score
+  `curator-report` on the trace of the turn it was made in (value = the
+  category, comment = the curator's words and the agent's one context
+  line, redacted, plus the issue URL), located from the archived transcript
+  and the hook's own turn numbers, so no API read is spent; a report whose
+  turn is not forwarded yet waits for a later tick, and after a day goes on
+  the session instead. Filter by that score in Langfuse to read them.
   Verify with `systemctl list-timers 'go-jupyter-trace-sync*'`,
   `journalctl -t go-jupyter-trace-sync` (one summary line per run: accounts,
-  archived, forwarded, verified, failures), `ls /var/lib/go-jupyter/traces`
+  archived, forwarded, reports, verified, failures), `ls /var/lib/go-jupyter/traces`
   and the Langfuse project. Deploying on a running box is by hand
   (`scripts/README.md` has the commands); `go-jupyter-update` would restart
   the hub, which this does not need. Update the vendored hook by replacing the

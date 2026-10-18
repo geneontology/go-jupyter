@@ -9,37 +9,41 @@ transcripts have been forwarded, inside a subshell that holds the Langfuse keys
     go-jupyter-report-marks --user <langfuse user id> --reports <archived
         ~/.go-jupyter/reports copy> --mirror <the account's redacted mirror
         of ~/.claude/projects> --state-file <the hook's langfuse_state.json>
-        --sent-dir <where one marker per posted record goes>
+        --sent-dir <where one marker per handled record goes>
         --redactor <go-jupyter-redact-transcript> [--max-age-secs N] [--dry-run]
 
-For every <reports>/*.json with no marker under <sent-dir> (the /report skill
-in geneontology/go-skills writes them: version 1, with session_id, turn_uuid,
-category, note, context, issue_url, skill, timestamp):
+For every regular file <reports>/*.json with no marker under <sent-dir> (the
+/report skill in geneontology/go-skills writes them: version 1, with
+session_id, turn_uuid, category, note, context, issue_url, skill, timestamp;
+the curator owns the file, so every field is untrusted):
 
-  1. find the turn: from turn_uuid (the last assistant row when the record
-     was written) up the parentUuid chain to the user row that started the
-     turn, classified as the hook does (a user row that is not a tool
-     result, not an isMeta injection, not a task notification and not an
-     interrupt marker), then that row's number in the hook's turn_numbers
-     for the mirrored transcript; the trace id is sha256("<session>:<turn>")
-     [:32], the hook's own formula under CC_LANGFUSE_TRACE_SEED;
-  2. post one score through the Langfuse SDK (the ingestion path, not the
-     small GET bucket): name "curator-report", categorical value = the
-     category, comment = the curator's note, the agent's context line and
-     the issue URL, note and context through the redactor; metadata carries
-     the record's file name, turn uuid and skill;
-  3. after the SDK has flushed, write the marker, "<time> <trace|session>
-     <id> <category>", so the record is not posted again. The score id is
-     sha256("curator-report:<user>:<record file>")[:32], so a post repeated
-     after a failed flush updates the same score rather than adding one.
+  1. find the turn, the way the hook groups rows: in the mirrored transcript
+     <mirror>/<slug>/<session_id>.jsonl, take the row whose uuid is turn_uuid
+     (the last assistant row when the record was written) and scan back in
+     file order to the nearest row that opens a turn (a user row that is not
+     a tool result, not an isMeta injection, not a task notification and not
+     the interrupt marker); that row's number is in the hook's turn_numbers
+     for the transcript; the trace id is sha256("<session>:<turn>")[:32],
+     the hook's own formula under CC_LANGFUSE_TRACE_SEED;
+  2. post one score with the synchronous public API (POST /api/public/scores,
+     which raises on any failure; not the trace GET bucket): name
+     "curator-report", categorical value = the category, comment = the
+     curator's note, the agent's context line and the issue URL, note and
+     context through the redactor; metadata = record file, turn uuid, skill,
+     time of the report; the score id is sha256("curator-report:<user>:
+     <record file>")[:32], so a repeat after a failure updates the same score;
+  3. write the marker, "<time> <trace|session|none> <id> <category>", only
+     after the API accepted the score, so a record is never marked and lost.
 
-A record whose turn the hook has not numbered yet (the transcript is not
-mirrored or forwarded yet) is deferred: no marker, retried next tick. Once a
-record is older than --max-age-secs (default a day) and still unplaced, or
-when it has a session id but its turn cannot be found, the score goes on
-the session instead; a record with no session id at all gets a marker
-"none" and a line for the operator. Exit 1 if a post failed; --dry-run
-prints what would be posted and needs no keys.
+Until a record is --max-age-secs old (default a day) it is deferred, without
+a marker, while its transcript is not mirrored yet, its turn_uuid is not in
+the transcript yet, or the hook has not numbered the turn yet; after that it
+is scored on the session (Langfuse shows session scores in the Sessions tab,
+not in the trace list). A record whose turn opener was copied from another
+session (a resumed session; the hook never numbers those) goes on the
+session at once; one with no usable session id, or unreadable once it is
+old, gets a "none" marker. Exit 1 if a post failed; --dry-run prints what
+would be posted and needs no keys.
 """
 import argparse
 import datetime
@@ -48,19 +52,50 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import sys
 
 MAX_COMMENT = 4000
-INTERRUPT_MARKER = "[Request interrupted by user"
+INTERRUPT_MARKER = "[Request interrupted by user]"   # the hook's INTERRUPTED_TURN_MARKER, exactly
+CATEGORIES = ("error", "wrong-tool", "idea", "complaint", "praise", "other")
+ID_RE = re.compile(r"[A-Za-z0-9_-]{1,80}")
 
 
 def load_redactor(path):
-    # The redactor has no .py suffix, so name its loader explicitly.
+    # The redactor has no .py suffix, so name its loader explicitly; no
+    # bytecode cache next to a system script.
+    sys.dont_write_bytecode = True
     loader = importlib.machinery.SourceFileLoader("go_jupyter_redactor", path)
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
     return mod.redact_line
+
+
+# --- row classification, mirroring the hook (get_content_from_row,
+# extract_text_from_content, get_user_or_assistant_role_from_row,
+# is_tool_result, add_injected_context_row, is_task_notification_row,
+# is_interrupted_turn_row, is_row_from_another_session).
+
+def row_content(d):
+    m = d.get("message")
+    if isinstance(m, dict):
+        return m.get("content")
+    return d.get("content")
+
+
+def row_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for x in content:
+            if isinstance(x, dict) and x.get("type") == "text":
+                parts.append(x.get("text", ""))
+            elif isinstance(x, str):
+                parts.append(x)
+        return "\n".join(p for p in parts if p)
+    return ""
 
 
 def row_role(d):
@@ -73,63 +108,56 @@ def row_role(d):
     return None
 
 
-def row_text(d):
-    c = (d.get("message") or {}).get("content") if isinstance(d.get("message"), dict) else None
-    if isinstance(c, str):
-        return c
-    if isinstance(c, list):
-        return "".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
-    return ""
-
-
 def starts_turn(d):
-    """The hook's test for a user row that opens a turn."""
     if row_role(d) != "user" or d.get("isMeta"):
         return False
-    c = (d.get("message") or {}).get("content") if isinstance(d.get("message"), dict) else None
+    c = row_content(d)
     if isinstance(c, list) and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
         return False
     origin = d.get("origin")
     if isinstance(origin, dict) and origin.get("kind") == "task-notification":
         return False
-    text = row_text(d).lstrip()
-    if text.startswith("<task-notification>") or text.startswith(INTERRUPT_MARKER):
-        return False
-    return True
+    text = row_text(c).lstrip()
+    return not (text.startswith("<task-notification>") or text.startswith(INTERRUPT_MARKER))
+
+
+def from_other_session(d, session_id):
+    s = d.get("sessionId")
+    return isinstance(s, str) and bool(s) and s != session_id
 
 
 def find_transcript(mirror, session_id):
+    """<mirror>/<slug>/<session_id>.jsonl, inside the mirror, or None."""
+    root = os.path.realpath(mirror)
     try:
         slugs = os.listdir(mirror)
     except OSError:
         return None
     for slug in slugs:
         p = os.path.join(mirror, slug, f"{session_id}.jsonl")
-        if os.path.isfile(p):
+        if os.path.isfile(p) and os.path.realpath(p).startswith(root + os.sep):
             return p
     return None
 
 
-def turn_user_row(transcript_path, turn_uuid):
-    """uuid of the user row that started the turn containing turn_uuid, or None."""
-    rows = {}
+def turn_opener(transcript_path, turn_uuid):
+    """(uuid of the user row that opened the turn containing turn_uuid, that
+    row) in file order, as the hook groups turns; (None, None) if turn_uuid
+    is not in the transcript or no opener precedes it."""
+    opener = None
     with open(transcript_path, encoding="utf-8", errors="surrogateescape") as fh:
         for line in fh:
             try:
                 d = json.loads(line)
             except ValueError:
                 continue
-            u = d.get("uuid")
-            if isinstance(u, str) and isinstance(d, dict):
-                rows[u] = d
-    seen = set()
-    cur = turn_uuid
-    while isinstance(cur, str) and cur in rows and cur not in seen:
-        seen.add(cur)
-        if starts_turn(rows[cur]):
-            return cur
-        cur = rows[cur].get("parentUuid")
-    return None
+            if not isinstance(d, dict):
+                continue
+            if starts_turn(d) and isinstance(d.get("uuid"), str):
+                opener = d
+            if d.get("uuid") == turn_uuid:
+                return (opener["uuid"], opener) if opener else (None, None)
+    return None, None
 
 
 def turn_number(state_file, session_id, mirror_path, user_row_uuid):
@@ -147,12 +175,16 @@ def trace_id(session_id, turn):
     return hashlib.sha256(f"{session_id}:{turn}".encode("utf-8")).hexdigest()[:32]
 
 
-def record_age(rec, now):
+def record_age(rec, path, now):
+    """Seconds since the record was made: its timestamp, else the file's mtime."""
+    ts = rec.get("timestamp")
     try:
-        ts = datetime.datetime.strptime(rec.get("timestamp", ""), "%Y-%m-%dT%H:%M:%SZ")
-        return (now - ts.replace(tzinfo=datetime.timezone.utc)).total_seconds()
-    except ValueError:
-        return float("inf")
+        t = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=datetime.timezone.utc)
+    except (ValueError, TypeError):
+        t = datetime.datetime.fromtimestamp(os.path.getmtime(path), datetime.timezone.utc)
+    return (now - t).total_seconds()
 
 
 def main():
@@ -175,95 +207,96 @@ def main():
         return 0
     redact = load_redactor(args.redactor)
     now = datetime.datetime.now(datetime.timezone.utc)
-    lf = None
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    scores = None
     if not args.dry_run:
         os.makedirs(args.sent_dir, mode=0o700, exist_ok=True)
         from langfuse import Langfuse  # keys from the environment
-        lf = Langfuse()
+        scores = Langfuse(tracing_enabled=False).api.scores
     failed = 0
-    markers = []   # (name, line) written only once the SDK has flushed
+
+    def mark(name, kind, ident, category):
+        if not args.dry_run:
+            with open(os.path.join(args.sent_dir, name), "w") as fh:
+                fh.write(f"{stamp} {kind} {ident or '-'} {category}\n")
 
     for name in pending:
         path = os.path.join(args.reports, name)
+        if os.path.islink(path) or not os.path.isfile(path):
+            print(f"  report {args.user} {name}: not a regular file; marked, not posted")
+            mark(name, "none", "", "-")
+            continue
         try:
             with open(path, encoding="utf-8") as fh:
                 rec = json.load(fh)
-            assert isinstance(rec, dict)
+            if not isinstance(rec, dict):
+                raise ValueError("not a JSON object")
         except Exception as e:
-            print(f"  report {args.user} {name}: unreadable ({e}); skipped")
+            old = (now.timestamp() - os.path.getmtime(path)) > args.max_age_secs
+            print(f"  report {args.user} {name}: unreadable ({e}); " + ("marked, not posted" if old else "retried next run"))
+            if old:
+                mark(name, "none", "", "unreadable")
             continue
-        sid = rec.get("session_id") if isinstance(rec.get("session_id"), str) else None
-        tu = rec.get("turn_uuid") if isinstance(rec.get("turn_uuid"), str) else None
-        category = str(rec.get("category") or "other")
+        sid = rec.get("session_id"); tu = rec.get("turn_uuid")
+        sid = sid if isinstance(sid, str) and ID_RE.fullmatch(sid) else None
+        tu = tu if isinstance(tu, str) and ID_RE.fullmatch(tu) else None
+        category = rec.get("category") if rec.get("category") in CATEGORIES else "other"
         comment = redact(str(rec.get("note") or "")).strip()
         if rec.get("context"):
             comment += "\n\n[agent context] " + redact(str(rec["context"])).strip()
         if rec.get("issue_url"):
             comment += "\n\n[issue] " + str(rec["issue_url"]).strip()
         comment = comment[:MAX_COMMENT]
-        metadata = {"record": name, "turn_uuid": tu, "skill": rec.get("skill"),
-                    "reported_at": rec.get("timestamp")}
+        metadata = {"record": name, "turn_uuid": tu, "skill": str(rec.get("skill") or "")[:80] or None,
+                    "reported_at": str(rec.get("timestamp") or "")[:40] or None}
+        old = record_age(rec, path, now) > args.max_age_secs
 
         target = None   # ("trace", id) | ("session", id) | ("none", "")
         why = ""
         if sid and tu:
             tpath = find_transcript(args.mirror, sid)
-            urow = turn_user_row(tpath, tu) if tpath else None
-            if tpath and urow:
+            urow, opener = turn_opener(tpath, tu) if tpath else (None, None)
+            if not tpath:
+                why = "transcript not mirrored yet"
+            elif not urow:
+                why = "turn not in the mirrored transcript yet"
+            elif from_other_session(opener, sid):
+                target = ("session", sid); why = "turn copied from another session; on the session"
+            else:
                 n = turn_number(args.state_file, sid, tpath, urow)
                 if n is not None:
                     target = ("trace", trace_id(sid, n))
                 else:
                     why = "turn not numbered by the hook yet"
-            else:
-                why = "transcript not mirrored yet" if not tpath else "turn's user row not found"
             if target is None:
-                old = record_age(rec, now) > args.max_age_secs
-                if why == "turn's user row not found" or old:
-                    target = ("session", sid)
-                    why += "; on the session" + (" (record older than max age)" if old else "")
-                else:
+                if not old:
                     print(f"  report {args.user} {name}: {why}; deferred")
                     continue
+                target = ("session", sid); why += "; on the session (record older than max age)"
         elif sid:
-            target = ("session", sid)
-            why = "no turn id; on the session"
+            target = ("session", sid); why = "no usable turn id; on the session"
         else:
-            target = ("none", "")
-            why = "no session id; not posted"
+            target = ("none", ""); why = "no usable session id; not posted"
 
         kind, ident = target
-        score_id = hashlib.sha256(f"curator-report:{args.user}:{name}".encode("utf-8")).hexdigest()[:32]
         if kind == "none":
             print(f"  report {args.user} {name}: {category}; {why}; the archived copy is all there is")
-            if not args.dry_run:
-                markers.append((name, f"{now.strftime('%Y-%m-%dT%H:%M:%SZ')} none - {category}\n"))
+            mark(name, kind, ident, category)
             continue
         if args.dry_run:
             print(f"  report {args.user} {name}: would post {category} on {kind} {ident} {why}".rstrip())
             continue
+        score_id = hashlib.sha256(f"curator-report:{args.user}:{name}".encode("utf-8")).hexdigest()[:32]
+        where = {"trace_id": ident} if kind == "trace" else {"session_id": ident}
         try:
-            where = {"trace_id": ident} if kind == "trace" else {"session_id": ident}
-            lf.create_score(name="curator-report", value=category, score_id=score_id, data_type="CATEGORICAL",
-                            comment=comment or None, metadata=metadata, **where)
+            scores.create(id=score_id, name="curator-report", value=category, data_type="CATEGORICAL",
+                          comment=comment or None, metadata=metadata, **where)
         except Exception as e:
             failed += 1
-            print(f"  report {args.user} {name}: post failed ({e})")
+            print(f"  report {args.user} {name}: post failed ({type(e).__name__}: {str(e)[:200]})")
             continue
-        markers.append((name, f"{now.strftime('%Y-%m-%dT%H:%M:%SZ')} {kind} {ident or '-'} {category}\n"))
+        mark(name, kind, ident, category)
         print(f"  report {args.user} {name}: posted {category} on {kind} {ident} {why}".rstrip())
-
-    if lf is not None:
-        try:
-            lf.flush()
-            lf.shutdown()
-        except Exception as e:
-            failed += 1
-            print(f"  report {args.user}: flush failed ({e}); {len(markers)} record(s) will be posted again")
-            markers = []
-    for name, line in markers:
-        with open(os.path.join(args.sent_dir, name), "w") as fh:
-            fh.write(line)
     return 1 if failed else 0
 
 

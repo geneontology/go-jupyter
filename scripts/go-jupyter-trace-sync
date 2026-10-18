@@ -317,12 +317,19 @@ for user in "${TARGETS[@]}"; do
 
     # 1b. The curator's /report records, the same way (a symlinked
     #     ~/.go-jupyter or reports/ is refused, like ~/.claude above).
+    #     Only the archived copy is ever read (a dry run too: it shows the
+    #     records of the previous real run).
     reports_src="$home/.go-jupyter/reports"; reports_dir="$arch/reports"
     if [ -d "$reports_src" ] && [ ! -L "$home/.go-jupyter" ] && [ ! -L "$reports_src" ]; then
-        [ "$DRY" -eq 1 ] || install -d -m 0700 "$arch/reports"
-        rsync -rlt --safe-links --no-owner --no-group $DRYFLAG "$reports_src/" "$arch/reports/" >/dev/null 2>&1 \
-            || log "rsync of $reports_src failed (exit $?); the records are retried next run"
-        [ "$DRY" -eq 0 ] || reports_dir="$reports_src"   # a dry run reads the records in place
+        rs_rc=0
+        if [ "$DRY" -eq 0 ]; then install -d -m 0700 "$arch/reports" || rs_rc=$?; fi
+        if [ "$rs_rc" -eq 0 ]; then
+            rsync -rlt --safe-links --no-owner --no-group $DRYFLAG "$reports_src/" "$arch/reports/" >/dev/null 2>&1 || rs_rc=$?
+        fi
+        if [ "$rs_rc" -ne 0 ]; then
+            failures=$((failures + 1)); reports_dir=""
+            log "archiving $reports_src failed (exit $rs_rc); the records are retried next run"
+        fi
     elif [ -L "$home/.go-jupyter" ] || [ -L "$reports_src" ]; then
         log "skip reports of $user: $reports_src or a parent is a symlink"
     fi
@@ -471,14 +478,17 @@ for user in "${TARGETS[@]}"; do
     #    score on its turn's trace (after this run's forwarding, so a report
     #    made in the last turn finds its turn numbered). Nothing here reads
     #    from the API.
-    if [ -d "$reports_dir" ] && [ -n "$(ls -A "$reports_dir" 2>/dev/null)" ]; then
-        marks_out="$(mktemp)"; rc=0
+    if [ -n "$reports_dir" ] && [ -d "$reports_dir" ] && [ -n "$(ls -A "$reports_dir" 2>/dev/null)" ]; then
+        marks_out="$(mktemp)" || { failures=$((failures + 1)); log "mktemp failed; reports of $user skipped this run"; continue; }
+        rc=0
         mark_reports "$lf_user" "$reports_dir" "$mirror" "$LF_STATE/reports/$user" >"$marks_out" 2>&1 || rc=$?
         cat "$marks_out"
-        n="$(grep -c ': posted ' "$marks_out" || true)"; reports=$((reports + n))
+        n="$(grep -c '^  report .*: posted ' "$marks_out" || true)"; reports=$((reports + ${n:-0}))
         if [ "$rc" -ne 0 ]; then
             failures=$((failures + 1))
-            log "report marks failed for $user (exit $rc): $(grep -m1 -E 'failed|Error|error' "$marks_out" | head -c 200)"
+            why="$(grep -m1 -E 'failed|Error|error' "$marks_out" || true)"
+            [ "$rc" -ne 124 ] || why="timeout after 60s"
+            log "report marks failed for $user (exit $rc): ${why:0:200}"
         fi
         command rm -f "$marks_out"
     fi

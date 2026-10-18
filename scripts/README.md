@@ -134,12 +134,17 @@ redacted, plus the issue URL if one was filed; metadata = record file, turn
 uuid, skill). The turn is found by walking the archived transcript from the
 record's `turn_uuid` to the user row that started the turn and reading that
 row's number from the hook's state, so no API request is needed; a record
-whose turn the hook has not numbered yet waits for a later tick, and one that
-is still unplaced after a day, or whose turn cannot be found, is scored on
-the session instead. One marker per posted record sits under
-`langfuse-state/reports/<user>/`; the score id is derived from the record's
-file name, so a repeat after a failed flush updates rather than duplicates.
-In Langfuse, filter traces or sessions by the score `curator-report` to find
+whose turn the hook has not numbered yet (or whose transcript, or turn, is
+not in the archive yet) waits for a later tick, and one that is still
+unplaced after a day is scored on the session instead (session scores show
+in Langfuse's Sessions tab, not in the trace list). The score is posted with
+the synchronous scores API, which fails loudly, and the marker under
+`langfuse-state/reports/<user>/` is written only after the API accepted it;
+the score id is derived from the record's file name, so a repeat after a
+failure updates rather than duplicates. Only the archived copy of the records
+is ever read, in a dry run too (which therefore shows the records of the
+previous real run, and nothing for an account with no archive yet). In
+Langfuse, filter traces or sessions by the score `curator-report` to find
 them; the score's comment is the curator's text.
 
 ```sh

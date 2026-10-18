@@ -214,6 +214,43 @@ the script header); `GO_JUPYTER_LOOK_GAP_SECS=0` makes every unverified
 record due at once. Mind that a laptop test shares the project's GET bucket
 with the box's tick: a 429 on either side only pauses that run's looks.
 
+## go-jupyter-session-summary — what a session did, from its transcript
+
+Installed to `/usr/local/bin` by cloud-init, runs as the curator
+([#29](https://github.com/geneontology/go-jupyter/issues/29)). It reads a
+session's transcript (`~/.claude/projects/<slug>/<session>.jsonl`; the newest
+one for the current directory by default, `--session <id>` or
+`--transcript <path>` otherwise) and prints a Markdown summary written from
+the tool calls and their results, not from the agent's narration: changes
+first, in order (GO-CAM model writes with model id, operation and server,
+flagged PRODUCTION when `--live` or a production host was used; `gh pr
+create`, `gh issue create`, merges, comments, commits, pushes; files written
+with Write/Edit/NotebookEdit and shell commands that change files; `/report`
+records), then model reads, external lookups (PubMed, UniProt, AmiGO, web
+fetches), counts of local reads and subagents, the prompts the curator gave,
+and a footer with the transcript's path, size and sha256 at the time, which
+an operator can compare with the root-side archive. Each entry carries the
+time, the row uuid and whether the tool reported an error. `--write` saves
+`~/.go-jupyter/summaries/<session>.md` and `.json`; `--json` prints the
+JSON; `--from-hook` reads a Claude Code hook payload on stdin. The managed
+settings run it as a `SessionEnd` hook (`--write --quiet --from-hook`,
+timeout 30 s; the transcript can lag the last turn at that moment, so the
+on-demand `/summary` skill in go-skills is the complete one). A raw minerva
+request whose payload was built in a variable or a script shows as
+"payload built elsewhere" and is counted as a write; a model id seen in the
+tool's output is reported as such.
+
+```sh
+go-jupyter-session-summary                       # this directory's newest session
+go-jupyter-session-summary --session <id> --write
+sudo go-jupyter-session-summary --transcript /var/lib/go-jupyter/traces/<user>/projects/<slug>/<id>.jsonl   # an operator, from the archive
+```
+
+On a running box: `sudo install -m 0755 /opt/go-jupyter/scripts/go-jupyter-session-summary /usr/local/bin/`
+and add the `hooks` entry from `terraform/user_data.sh.tpl` to
+`/etc/claude-code/managed-settings.json` by hand (first-boot file); sessions
+started after that run the hook.
+
 ## go-jupyter-git-identity — commit identity from the GitHub profile
 
 `sudo go-jupyter-git-identity <user>` (or `--all`, `--dry-run`) sets `user.name`

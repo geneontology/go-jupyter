@@ -1,0 +1,375 @@
+#!/usr/bin/env python3
+"""go-jupyter-session-summary — what a Claude Code session did, from its
+transcript, for the curator and for an auditor (#29).
+
+    go-jupyter-session-summary                  # newest transcript for this directory
+    go-jupyter-session-summary --session <id>   # that session, wherever its transcript is
+    go-jupyter-session-summary --transcript <path>
+    go-jupyter-session-summary --write          # also save under ~/.go-jupyter/summaries/
+    go-jupyter-session-summary --json           # the same, as JSON
+    go-jupyter-session-summary --from-hook      # read a Claude Code hook payload on stdin
+
+Reads the transcript (JSON lines) only; nothing here calls a network service
+or needs a token. Written independently of the agent's own narration: every
+entry comes from a tool call the agent made and the result that came back.
+Changes first, in order, then lookups:
+
+  * GO-CAM model writes: `noctua barista <command>` (every command but
+    get-model, export-model and list-models) and raw barista requests
+    (`m3BatchPrivileged`), with the model id, the operation and the server:
+    noctua-dev, or PRODUCTION when `--live` or a production host was used;
+  * drop-box and other GitHub writes: `gh pr create`, `gh issue create`,
+    `gh pr merge`, comments, `git commit`, `git push`;
+  * files written with Claude Code's Write, Edit and NotebookEdit tools,
+    and shell commands that look like they change files;
+  * /report records made in the session;
+  * model reads, external lookups (barista reads, web fetches, searches,
+    curl to PubMed, UniProt, AmiGO and the like), local reads (counted),
+    subagents, skills used, and the prompts the curator gave.
+
+Each entry carries the transcript time and row uuid, and whether the tool
+reported an error. The footer has the transcript's path, size and sha256 at
+summary time, which an operator can compare with the root-side archive.
+Pure Python 3, no dependencies. Exit 2 when no transcript is found.
+"""
+import argparse
+import datetime
+import hashlib
+import json
+import os
+import re
+import shlex
+import sys
+
+BARISTA_READS = {"get-model", "export-model", "list-models", "token"}
+BARISTA_WRITES = {"create-model", "add-individual", "add-fact", "add-fact-evidence", "delete-individual",
+                  "delete-edge", "clear-model", "update-metadata", "add-annotation", "remove-annotation",
+                  "update-individual-annotation", "remove-individual-annotation", "add-protein-complex",
+                  "add-entity-set"}
+MINERVA_READS = {"get", "export", "export-all", "all-model-meta", "get-undo-redo", "meta", "search"}
+PROD_HOSTS = ("barista.berkeleybop.org", "noctua.geneontology.org", "api.geneontology.org/api/minerva_public")
+LOOKUP_HOSTS = (("eutils.ncbi.nlm.nih.gov", "PubMed"), ("pubmed.ncbi.nlm.nih.gov", "PubMed"),
+                ("rest.uniprot.org", "UniProt"), ("www.uniprot.org", "UniProt"), ("amigo.geneontology.org", "AmiGO"),
+                ("api.geneontology.org", "GO API"), ("www.ebi.ac.uk", "EBI"), ("quickgo", "QuickGO"),
+                ("europepmc.org", "Europe PMC"), ("purl.obolibrary.org", "OBO"), ("github.com", "GitHub"),
+                ("api.github.com", "GitHub"))
+SHELL_CHANGE = re.compile(r"(^|[\s;&|(])(rm|mv|cp|mkdir|rmdir|touch|chmod|chown|ln|sed\s+-i|tee|truncate|install|pip\s+install|uv\s+(tool\s+)?(install|sync|add)|npm\s+(i|install)|git\s+(checkout|switch|reset|rebase|merge|stash|clean|rm|mv|add))\b")
+REDIRECT = re.compile(r"^\d?>{1,2}(.*)$")   # a shell word that starts a redirect
+MODEL_RE = re.compile(r"(?<![/\w])(?:gomodel:)?([0-9a-f]{16})\b(?!/)")        # a model id, not an individual's
+MODEL_PREFIXED_RE = re.compile(r"(?<![/\w])gomodel:([0-9a-f]{12,16})\b(?!/)")
+MAXLEN = 160
+
+
+def row_content(d):
+    m = d.get("message")
+    return m.get("content") if isinstance(m, dict) else d.get("content")
+
+
+def text_of(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(x.get("text", "") if isinstance(x, dict) and x.get("type") == "text" else (x if isinstance(x, str) else "")
+                         for x in content).strip()
+    return ""
+
+
+def one_line(s, n=MAXLEN):
+    s = " ".join(str(s or "").split())
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def when(d):
+    ts = d.get("timestamp")
+    return ts if isinstance(ts, str) else ""
+
+
+def find_transcript(session_id=None):
+    base = os.path.expanduser("~/.claude/projects")
+    if session_id:
+        for slug in sorted(os.listdir(base)) if os.path.isdir(base) else []:
+            p = os.path.join(base, slug, f"{session_id}.jsonl")
+            if os.path.isfile(p):
+                return p
+        return None
+    slug = os.getcwd().replace("/", "-")
+    cands = []
+    for d in ([os.path.join(base, slug)] if os.path.isdir(os.path.join(base, slug)) else []) or \
+             [os.path.join(base, s) for s in (os.listdir(base) if os.path.isdir(base) else [])]:
+        for f in os.listdir(d):
+            if f.endswith(".jsonl") and os.path.isfile(os.path.join(d, f)):
+                cands.append(os.path.join(d, f))
+    return max(cands, key=os.path.getmtime) if cands else None
+
+
+def writes_a_file(cmd):
+    """A redirect to a file other than /dev/null, outside quotes."""
+    try:
+        words = shlex.split(cmd)
+    except ValueError:
+        words = cmd.split()
+    for i, w in enumerate(words):
+        m = REDIRECT.match(w)
+        if not m:
+            continue
+        target = m.group(1) or (words[i + 1] if i + 1 < len(words) else "")
+        if target and target != "/dev/null" and not target.startswith("&"):
+            return True
+    return False
+
+
+def classify_bash(cmd, result=""):
+    """-> list of (kind, detail) for one shell command string; `result` is the
+    tool's full output, read when the command built its payload elsewhere."""
+    out = []
+    low = cmd.lower()
+    prod = any(h in low for h in PROD_HOSTS) or bool(re.search(r"\s--live\b", cmd))
+    server = "PRODUCTION" if prod else "noctua-dev"
+    # noctua barista subcommands (barista is the documented alias)
+    for m in re.finditer(r"(?:noctua\s+barista|(?<![\w/-])barista)\s+([a-z-]+)((?:\s+[^;&|]*)?)", cmd):
+        sub, rest = m.group(1), m.group(2) or ""
+        if re.search(r"(^|\s)(--help|-h)(\s|$)", rest):
+            continue   # help text, not a call
+        mid = re.search(r"(?:--model|-m)\s+(?:gomodel:)?([0-9a-f]{12,16})", rest)
+        model = f"gomodel:{mid.group(1)}" if mid else "(model id not on the command line)"
+        if re.match(r"\s*(Usage:|Missing (option|argument)|Error)", result) or "│ --help" in result:
+            out.append(("shell", f"barista {sub}: usage or an error shown, no call made"))
+        elif sub in BARISTA_WRITES:
+            out.append(("model-write", f"{sub} on {model} at {server}"))
+        elif sub in BARISTA_READS:
+            out.append(("model-read", f"{sub} {model if mid else ''} at {server}".strip()))
+    # raw minerva requests through curl
+    if "curl" in low and ("barista" in low or "minerva" in low):
+        # The skill has the agent build the payload in a variable or file and
+        # print it before sending, so the operations and model ids are read
+        # from the command, else from the tool's output.
+        src = cmd if '"operation"' in cmd else result
+        ops = []
+        for o in re.findall(r'"operation"\s*:\s*"([a-z-]+)"', src):
+            if o not in ops:
+                ops.append(o)
+        models = sorted({f"gomodel:{x}" for x in re.findall(r'"model-id"\s*:\s*"(?:gomodel:)?([0-9a-f]{12,16})"', src)})
+        if not models:
+            found = MODEL_PREFIXED_RE.findall(result[:4000]) or MODEL_RE.findall(result[:4000])
+            models = [f"gomodel:{x} (in the output)" for x in sorted(set(found))[:3]]
+        if ops:
+            what = ", ".join(ops) + ("" if src is cmd else " (from the output)")
+        else:
+            what = "payload built elsewhere (operations not visible; counted as a write)"
+        detail = f"{what} on {', '.join(models) or '(no model id visible)'} at {server}"
+        if ops and all(o in MINERVA_READS for o in ops):
+            out.append(("model-read", "raw request: " + detail))
+        else:
+            out.append(("model-write", "raw request: " + detail))
+    # GitHub and git
+    for pat, kind, label in ((r"\bgh\s+pr\s+create\b", "github-write", "pull request opened"),
+                             (r"\bgh\s+issue\s+create\b", "github-write", "issue opened"),
+                             (r"\bgh\s+pr\s+merge\b", "github-write", "pull request merged"),
+                             (r"\bgh\s+(pr|issue)\s+comment\b", "github-write", "comment posted"),
+                             (r"\bgh\s+(pr|issue)\s+(close|edit|ready)\b", "github-write", "issue or PR changed"),
+                             (r"\bgh\s+api\b[^|;&]*(-X\s*(POST|PUT|PATCH|DELETE)|--method\s+(POST|PUT|PATCH|DELETE)|-f\s)", "github-write", "GitHub API write"),
+                             (r"\bgit\s+commit\b", "git", "commit"),
+                             (r"\bgit\s+push\b", "git", "push")):
+        if re.search(pat, cmd):
+            repo = re.search(r"--repo\s+(\S+)", cmd)
+            out.append((kind, label + (f" in {repo.group(1)}" if repo else "")))
+    if re.search(r"report/scripts/record\.sh|\brecord\.sh\s+--category", cmd):
+        cat = re.search(r"--category\s+(\S+)", cmd)
+        out.append(("report", f"/report {cat.group(1) if cat else ''}".strip()))
+    if not out and ("curl" in low or "wget" in low or "http" in low):
+        for host, label in LOOKUP_HOSTS:
+            if host in low:
+                out.append(("lookup", f"{label} ({host})"))
+                break
+        else:
+            m = re.search(r"https?://([^/\s'\"]+)", cmd)
+            if m:
+                out.append(("lookup", m.group(1)))
+    if not out and (SHELL_CHANGE.search(cmd) or writes_a_file(cmd)):
+        out.append(("shell-change", one_line(cmd, 120)))
+    if not out:
+        out.append(("shell", one_line(cmd, 120)))
+    return out
+
+
+def summarize(path):
+    rows = []
+    with open(path, encoding="utf-8", errors="surrogateescape") as fh:
+        for line in fh:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(d, dict):
+                rows.append(d)
+    results = {}   # tool_use_id -> (is_error, first line, full text)
+    for d in rows:
+        c = row_content(d)
+        if isinstance(c, list):
+            for b in c:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    body = b.get("content")
+                    txt = text_of(body) if isinstance(body, list) else str(body or "")
+                    results[b.get("tool_use_id")] = (bool(b.get("is_error")), one_line(txt), txt[:200000])
+    entries = []   # dicts: kind, when, uuid, detail, result, error
+    prompts = []
+    skills = set()
+    counts = {"local-read": 0, "lookup": 0, "subagent": 0, "model-read": 0, "shell": 0}
+    first = last = None
+    model_ids = set()
+    for d in rows:
+        ts = when(d)
+        if ts:
+            first = first or ts
+            last = ts
+        if d.get("type") == "user" and not d.get("isMeta"):
+            c = row_content(d)
+            if isinstance(c, list) and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+                continue
+            t = text_of(c)
+            if d.get("isCompactSummary"):
+                prompts.append((ts, "(context compacted; conversation continued from a summary)"))
+            elif t.startswith("<command-name>"):
+                m = re.search(r"<command-name>(.*?)</command-name>", t)
+                if m:
+                    skills.add(m.group(1)); prompts.append((ts, m.group(1)))
+            elif t and not t.startswith("<local-command-stdout>") and not t.startswith("[Request interrupted"):
+                prompts.append((ts, one_line(t, 120)))
+        if d.get("attributionSkill"):
+            skills.add(str(d["attributionSkill"]))
+        if d.get("type") != "assistant":
+            continue
+        c = row_content(d)
+        if not isinstance(c, list):
+            continue
+        for b in c:
+            if not (isinstance(b, dict) and b.get("type") == "tool_use"):
+                continue
+            name = b.get("name") or ""
+            inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+            err, res, full = results.get(b.get("id"), (False, "(no result recorded)", ""))
+            base = {"when": ts, "uuid": str(d.get("uuid") or "")[:8], "result": res, "error": err}
+            if name in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+                entries.append(dict(base, kind="file-write", detail=f"{name}: {inp.get('file_path') or inp.get('notebook_path') or '?'}"))
+            elif name == "Bash":
+                cmd = str(inp.get("command") or "")
+                for kind, detail in classify_bash(cmd, full):
+                    if kind in ("lookup", "model-read", "shell"):
+                        counts[kind] += 1
+                        if kind == "model-read":
+                            model_ids.update(f"gomodel:{x}" for x in MODEL_RE.findall(detail))
+                            entries.append(dict(base, kind=kind, detail=detail))
+                        elif kind == "lookup":
+                            entries.append(dict(base, kind=kind, detail=detail))
+                    else:
+                        if kind == "model-write":
+                            model_ids.update(f"gomodel:{x}" for x in MODEL_RE.findall(detail))
+                        entries.append(dict(base, kind=kind, detail=detail))
+            elif name in ("WebFetch", "WebSearch"):
+                counts["lookup"] += 1
+                entries.append(dict(base, kind="lookup", detail=f"{name}: {one_line(inp.get('url') or inp.get('query') or '', 120)}"))
+            elif name in ("Read", "Grep", "Glob", "LS"):
+                counts["local-read"] += 1
+            elif name in ("Task", "Agent"):
+                counts["subagent"] += 1
+                entries.append(dict(base, kind="subagent", detail=one_line(inp.get("description") or inp.get("prompt") or "", 120)))
+            elif name == "Skill":
+                skills.add(str(inp.get("skill") or inp.get("command") or ""))
+            elif name.startswith("mcp__"):
+                entries.append(dict(base, kind="mcp", detail=f"{name}: {one_line(json.dumps(inp, ensure_ascii=False), 120)}"))
+    user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+    m = re.search(r"/(?:home|traces)/([^/]+)/", os.path.realpath(path))
+    if m and (os.getuid() == 0 or not user):
+        user = m.group(1)
+    stat = os.stat(path)
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return {
+        "version": 1, "session_id": os.path.basename(path)[:-6], "transcript": path,
+        "transcript_size": stat.st_size, "transcript_sha256": h.hexdigest(),
+        "generated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "user": user, "first": first, "last": last,
+        "prompts": prompts, "skills": sorted(s for s in skills if s), "models": sorted(model_ids),
+        "entries": entries, "counts": counts,
+    }
+
+
+def render(s):
+    L = []
+    L.append(f"# Session summary: {s['session_id']}")
+    L.append("")
+    L.append(f"User {s['user'] or '?'}, {s['first'] or '?'} to {s['last'] or '?'} (UTC), {len(s['prompts'])} prompt(s). "
+             f"Generated {s['generated_at']} from the transcript, not from the agent's own account of itself.")
+    if s["skills"]:
+        L.append(f"Skills used: {', '.join(s['skills'])}.")
+    if s["models"]:
+        L.append(f"GO-CAM models touched: {', '.join(s['models'])}.")
+    changes = [e for e in s["entries"] if e["kind"] in ("model-write", "github-write", "git", "file-write", "report", "shell-change", "mcp")]
+    L.append(""); L.append("## Changes made (in order)"); L.append("")
+    if not changes:
+        L.append("None recorded: no model write, GitHub write, commit, push, file write or /report in this session.")
+    labels = {"model-write": "MODEL WRITE", "github-write": "GITHUB", "git": "GIT", "file-write": "FILE",
+              "report": "REPORT", "shell-change": "SHELL", "mcp": "MCP"}
+    for e in changes:
+        flag = " **FAILED**" if e["error"] else ""
+        L.append(f"- `{e['when'][11:19] if e['when'] else '--:--:--'}` {labels[e['kind']]}: {e['detail']}{flag} "
+                 f"(result: {e['result'] or '-'}; row {e['uuid']})")
+    reads = [e for e in s["entries"] if e["kind"] in ("model-read", "lookup", "subagent")]
+    L.append(""); L.append("## Looked up"); L.append("")
+    c = s["counts"]
+    L.append(f"{c['model-read']} model read(s), {c['lookup']} external lookup(s), {c['local-read']} local file read(s) or search(es), "
+             f"{c['subagent']} subagent(s), {c['shell']} other shell command(s).")
+    for e in reads:
+        L.append(f"- `{e['when'][11:19] if e['when'] else '--:--:--'}` {e['kind']}: {e['detail']}{' **FAILED**' if e['error'] else ''}")
+    L.append(""); L.append("## What you asked"); L.append("")
+    for ts, p in s["prompts"]:
+        L.append(f"- `{ts[11:19] if ts else '--:--:--'}` {p}")
+    L.append(""); L.append("## Evidence"); L.append("")
+    L.append(f"Transcript `{s['transcript']}`, {s['transcript_size']} bytes, sha256 `{s['transcript_sha256']}` when this was written. "
+             "The hub archives every transcript root-side; an operator can compare.")
+    return "\n".join(L) + "\n"
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--session"); ap.add_argument("--transcript")
+    ap.add_argument("--write", action="store_true"); ap.add_argument("--json", action="store_true")
+    ap.add_argument("--from-hook", action="store_true", help="read {session_id, transcript_path} from stdin (Claude Code hook)")
+    ap.add_argument("--quiet", action="store_true", help="print nothing but errors (with --write)")
+    args = ap.parse_args()
+    path = args.transcript
+    if args.from_hook:
+        try:
+            payload = json.load(sys.stdin)
+            path = payload.get("transcript_path") or path
+            if not path and payload.get("session_id"):
+                path = find_transcript(payload["session_id"])
+        except Exception:
+            pass
+    if not path:
+        path = find_transcript(args.session)
+    if not path or not os.path.isfile(path):
+        print("go-jupyter-session-summary: no transcript found", file=sys.stderr)
+        return 2
+    s = summarize(path)
+    md = render(s)
+    if args.write:
+        out_dir = os.path.expanduser("~/.go-jupyter/summaries")
+        os.makedirs(out_dir, mode=0o700, exist_ok=True)
+        os.chmod(out_dir, 0o700)
+        for suffix, body in ((".md", md), (".json", json.dumps(s, indent=2, ensure_ascii=False) + "\n")):
+            p = os.path.join(out_dir, s["session_id"] + suffix)
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            os.chmod(p, 0o600)
+        if not args.quiet:
+            print(f"written: {os.path.join(out_dir, s['session_id'])}.md and .json", file=sys.stderr)
+    if not args.quiet:
+        sys.stdout.write(json.dumps(s, indent=2, ensure_ascii=False) + "\n" if args.json else md)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

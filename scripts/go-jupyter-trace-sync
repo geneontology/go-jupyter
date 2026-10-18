@@ -90,7 +90,7 @@
 #   GO_JUPYTER_QUIET_SECS (86400)
 #   GO_JUPYTER_CHUNK_MIN_BYTES (1048576)   GO_JUPYTER_CHUNK_LINES (300)
 #   GO_JUPYTER_LOOK_GAP_SECS (1800)   GO_JUPYTER_LISTS_PER_RUN (3)
-#   GO_JUPYTER_MAX_GETS_PER_RUN (12)   GO_JUPYTER_GET_GAP_SECS (15)
+#   GO_JUPYTER_MAX_GETS_PER_RUN (4)   GO_JUPYTER_GET_GAP_SECS (15)
 #   GO_JUPYTER_ACCOUNTS: space-separated account names with homes under
 #       GO_JUPYTER_HOME_ROOT/<name>; bypasses getent and lifts the root
 #       requirement, for a local test against directories you own.
@@ -115,7 +115,7 @@ CHUNK_LINES="${GO_JUPYTER_CHUNK_LINES:-300}"               # lines per slice
 HOOK_TIMEOUT=120
 LOOK_GAP_SECS="${GO_JUPYTER_LOOK_GAP_SECS:-1800}"       # forward -> first look, and miss -> next look
 LISTS_PER_RUN="${GO_JUPYTER_LISTS_PER_RUN:-3}"          # per-account trace listings per tick
-MAX_GETS_PER_RUN="${GO_JUPYTER_MAX_GETS_PER_RUN:-12}"   # listing pages + direct trace GETs per tick
+MAX_GETS_PER_RUN="${GO_JUPYTER_MAX_GETS_PER_RUN:-4}"    # listing pages + direct trace GETs per tick: the bucket answered 429 to the fifth
 GET_GAP_SECS="${GO_JUPYTER_GET_GAP_SECS:-15}"           # between GETs: the bucket is 5/min on Hobby
 
 log() { logger -t go-jupyter-trace-sync -- "$*"; echo "$*"; }

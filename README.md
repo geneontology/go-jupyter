@@ -222,7 +222,7 @@ cloud-init (never committed, never in the repo's history):
   a direct GET of the trace that answers 404 is a miss; after three misses
   the transcript is listed under `langfuse-state/failed/<user>/`. Looks are
   paid from Langfuse Cloud's small trace GET bucket (5 a minute on Hobby),
-  so a tick makes at most twelve, 15 s apart: per-account trace listings for
+  so a tick makes at most four, 15 s apart: per-account trace listings for
   the three accounts listed longest ago that have a look due, which settle
   every record they contain, then direct GETs for the rest. Every generation carries
   the whole earlier conversation as its input, so a long transcript's spans

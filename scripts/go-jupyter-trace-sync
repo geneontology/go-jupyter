@@ -45,8 +45,11 @@
 #             score "curator-report" (value = category, comment = the
 #             curator's note, redacted) on the trace of the turn it was made
 #             in, one marker per posted record under <state dir>/reports/
-#             <user>/. A record whose turn is not forwarded yet waits for the
-#             next tick; see the helper's header for the fallbacks.
+#             <user>/ (the comment is the note, the agent's context line and
+#             the issue URL, note and context redacted). A record whose turn
+#             is not forwarded yet waits for the next tick; one that can
+#             never be posted is marked so it is not retried forever; see the
+#             helper's header.
 #
 # Delivery checks. The hook is fail-open: an export it cannot deliver is
 # reported on its stderr while its offset still advances, so (1) nothing is
@@ -320,18 +323,19 @@ for user in "${TARGETS[@]}"; do
     #     Only the archived copy is ever read (a dry run too: it shows the
     #     records of the previous real run).
     reports_src="$home/.go-jupyter/reports"; reports_dir="$arch/reports"
-    if [ -d "$reports_src" ] && [ ! -L "$home/.go-jupyter" ] && [ ! -L "$reports_src" ]; then
+    if [ -L "$home/.go-jupyter" ] || [ -L "$reports_src" ]; then
+        log "skip reports of $user: $reports_src or a parent is a symlink"; reports_dir=""
+    elif [ -d "$reports_src" ] && [ "$DRY" -eq 0 ]; then
         rs_rc=0
-        if [ "$DRY" -eq 0 ]; then install -d -m 0700 "$arch/reports" || rs_rc=$?; fi
+        install -d -m 0700 "$arch/reports" || rs_rc=$?
         if [ "$rs_rc" -eq 0 ]; then
-            rsync -rlt --safe-links --no-owner --no-group $DRYFLAG "$reports_src/" "$arch/reports/" >/dev/null 2>&1 || rs_rc=$?
+            rsync -rlt --safe-links --no-owner --no-group "$reports_src/" "$arch/reports/" >/dev/null 2>&1 || rs_rc=$?
         fi
-        if [ "$rs_rc" -ne 0 ]; then
-            failures=$((failures + 1)); reports_dir=""
-            log "archiving $reports_src failed (exit $rs_rc); the records are retried next run"
-        fi
-    elif [ -L "$home/.go-jupyter" ] || [ -L "$reports_src" ]; then
-        log "skip reports of $user: $reports_src or a parent is a symlink"
+        case "$rs_rc" in
+            0|23|24) ;;   # 23/24: a record appeared or vanished mid-copy; routine
+            *) failures=$((failures + 1)); reports_dir=""
+               log "archiving $reports_src failed (exit $rs_rc); the records are retried next run" ;;
+        esac
     fi
 
     [ "$FORWARD" -eq 1 ] || continue

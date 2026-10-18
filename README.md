@@ -230,10 +230,11 @@ cloud-init (never committed, never in the repo's history):
   record per report under `~/.go-jupyter/reports/`, #25) is archived next to
   the transcripts and posted by `go-jupyter-report-marks` as a Langfuse score
   `curator-report` on the trace of the turn it was made in (value = the
-  category, comment = the curator's words, redacted), located from the
-  archived transcript and the hook's own turn numbers, so no API read is
-  spent; a report whose turn is not forwarded yet waits for a later tick.
-  Filter by that score in Langfuse to read them.
+  category, comment = the curator's words and the agent's one context
+  line, redacted, plus the issue URL), located from the archived transcript
+  and the hook's own turn numbers, so no API read is spent; a report whose
+  turn is not forwarded yet waits for a later tick, and after a day goes on
+  the session instead. Filter by that score in Langfuse to read them.
   Verify with `systemctl list-timers 'go-jupyter-trace-sync*'`,
   `journalctl -t go-jupyter-trace-sync` (one summary line per run: accounts,
   archived, forwarded, reports, verified, failures), `ls /var/lib/go-jupyter/traces`

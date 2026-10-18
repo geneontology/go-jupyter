@@ -143,9 +143,13 @@ the synchronous scores API, which fails loudly, and the marker under
 the score id is derived from the record's file name, so a repeat after a
 failure updates rather than duplicates. Only the archived copy of the records
 is ever read, in a dry run too (which therefore shows the records of the
-previous real run, and nothing for an account with no archive yet). In
+previous real run, and nothing for an account with no archive yet). A record
+that can never be posted (no usable session id, not a regular file, over 1 MB,
+unreadable or refused by the API once it is a day old) is marked so it is not
+retried forever; `ls langfuse-state/reports/<user>/` shows which. In
 Langfuse, filter traces or sessions by the score `curator-report` to find
-them; the score's comment is the curator's text.
+them; the comment is the curator's note, the agent's context line and the
+issue URL if one was filed.
 
 ```sh
 sudo go-jupyter-trace-sync --dry-run          # what would be archived, forwarded and posted

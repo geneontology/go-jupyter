@@ -33,7 +33,10 @@ the curator owns the file, so every field is untrusted):
      time of the report; the score id is sha256("curator-report:<user>:
      <record file>")[:32], so a repeat after a failure updates the same score;
   3. write the marker, "<time> <trace|session|none> <id> <category>", only
-     after the API accepted the score, so a record is never marked and lost.
+     after the API accepted the score, so a record is never marked and lost;
+     a record that will never be posted (no usable session id, not a regular
+     file, oversized, unreadable or refused by the API once it is old) gets a
+     "none" marker so it is not retried forever.
 
 Until a record is --max-age-secs old (default a day) it is deferred, without
 a marker, while its transcript is not mirrored yet, its turn_uuid is not in
@@ -56,6 +59,7 @@ import re
 import sys
 
 MAX_COMMENT = 4000
+MAX_RECORD_BYTES = 1_000_000   # a record is a few hundred bytes; never load more as root
 INTERRUPT_MARKER = "[Request interrupted by user]"   # the hook's INTERRUPTED_TURN_MARKER, exactly
 CATEGORIES = ("error", "wrong-tool", "idea", "complaint", "praise", "other")
 ID_RE = re.compile(r"[A-Za-z0-9_-]{1,80}")
@@ -92,6 +96,8 @@ def row_text(content):
         for x in content:
             if isinstance(x, dict) and x.get("type") == "text":
                 parts.append(x.get("text", ""))
+            elif isinstance(x, dict) and x.get("type") == "image":
+                parts.append("[image]")   # the hook describes images; only that text comes first matters here
             elif isinstance(x, str):
                 parts.append(x)
         return "\n".join(p for p in parts if p)
@@ -108,7 +114,9 @@ def row_role(d):
     return None
 
 
-def starts_turn(d):
+def starts_turn(d, turn_open):
+    """The hook's test for a user row that opens a turn; an interrupt marker
+    is kept inside the open turn, but opens one when none is open."""
     if row_role(d) != "user" or d.get("isMeta"):
         return False
     c = row_content(d)
@@ -118,7 +126,11 @@ def starts_turn(d):
     if isinstance(origin, dict) and origin.get("kind") == "task-notification":
         return False
     text = row_text(c).lstrip()
-    return not (text.startswith("<task-notification>") or text.startswith(INTERRUPT_MARKER))
+    if text.startswith("<task-notification>"):
+        return False
+    if text.startswith(INTERRUPT_MARKER):
+        return not turn_open
+    return True
 
 
 def from_other_session(d, session_id):
@@ -140,10 +152,11 @@ def find_transcript(mirror, session_id):
     return None
 
 
-def turn_opener(transcript_path, turn_uuid):
-    """(uuid of the user row that opened the turn containing turn_uuid, that
-    row) in file order, as the hook groups turns; (None, None) if turn_uuid
-    is not in the transcript or no opener precedes it."""
+def turn_opener(transcript_path, session_id, turn_uuid):
+    """The user row that opened the turn containing turn_uuid, in file order,
+    as the hook groups turns (rows copied from another session dropped
+    first); None if turn_uuid is not in the transcript or nothing opened a
+    turn before it. The row may lack a uuid; the hook numbers no such turn."""
     opener = None
     with open(transcript_path, encoding="utf-8", errors="surrogateescape") as fh:
         for line in fh:
@@ -151,13 +164,13 @@ def turn_opener(transcript_path, turn_uuid):
                 d = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(d, dict):
+            if not isinstance(d, dict) or from_other_session(d, session_id):
                 continue
-            if starts_turn(d) and isinstance(d.get("uuid"), str):
+            if starts_turn(d, opener is not None):
                 opener = d
             if d.get("uuid") == turn_uuid:
-                return (opener["uuid"], opener) if opener else (None, None)
-    return None, None
+                return opener
+    return None
 
 
 def turn_number(state_file, session_id, mirror_path, user_row_uuid):
@@ -178,12 +191,15 @@ def trace_id(session_id, turn):
 def record_age(rec, path, now):
     """Seconds since the record was made: its timestamp, else the file's mtime."""
     ts = rec.get("timestamp")
+    mtime = datetime.datetime.fromtimestamp(os.path.getmtime(path), datetime.timezone.utc)
     try:
         t = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
         if t.tzinfo is None:
             t = t.replace(tzinfo=datetime.timezone.utc)
     except (ValueError, TypeError):
-        t = datetime.datetime.fromtimestamp(os.path.getmtime(path), datetime.timezone.utc)
+        t = mtime
+    if t > now:
+        t = mtime   # a timestamp in the future is not a reason to wait
     return (now - t).total_seconds()
 
 
@@ -217,14 +233,21 @@ def main():
 
     def mark(name, kind, ident, category):
         if not args.dry_run:
-            with open(os.path.join(args.sent_dir, name), "w") as fh:
+            dst = os.path.join(args.sent_dir, name)
+            tmp = f"{dst}.tmp.{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as fh:
                 fh.write(f"{stamp} {kind} {ident or '-'} {category}\n")
+            os.replace(tmp, dst)   # a half-written marker would hide the record for good
 
     for name in pending:
         path = os.path.join(args.reports, name)
         if os.path.islink(path) or not os.path.isfile(path):
             print(f"  report {args.user} {name}: not a regular file; marked, not posted")
             mark(name, "none", "", "-")
+            continue
+        if os.path.getsize(path) > MAX_RECORD_BYTES:
+            print(f"  report {args.user} {name}: {os.path.getsize(path)} bytes is not a report; marked, not posted")
+            mark(name, "none", "", "oversized")
             continue
         try:
             with open(path, encoding="utf-8") as fh:
@@ -255,13 +278,14 @@ def main():
         why = ""
         if sid and tu:
             tpath = find_transcript(args.mirror, sid)
-            urow, opener = turn_opener(tpath, tu) if tpath else (None, None)
+            opener = turn_opener(tpath, sid, tu) if tpath else None
+            urow = opener.get("uuid") if opener else None
             if not tpath:
                 why = "transcript not mirrored yet"
-            elif not urow:
+            elif opener is None:
                 why = "turn not in the mirrored transcript yet"
-            elif from_other_session(opener, sid):
-                target = ("session", sid); why = "turn copied from another session; on the session"
+            elif not isinstance(urow, str) or not urow:
+                target = ("session", sid); why = "turn opened by a row without a uuid, which the hook never numbers; on the session"
             else:
                 n = turn_number(args.state_file, sid, tpath, urow)
                 if n is not None:
@@ -293,7 +317,10 @@ def main():
                           comment=comment or None, metadata=metadata, **where)
         except Exception as e:
             failed += 1
-            print(f"  report {args.user} {name}: post failed ({type(e).__name__}: {str(e)[:200]})")
+            print(f"  report {args.user} {name}: post failed ({type(e).__name__}: {str(e)[:200]})"
+                  + ("; a day old, marked and given up" if old else ""))
+            if old:
+                mark(name, "none", "", f"post-failed:{type(e).__name__}")
             continue
         mark(name, kind, ident, category)
         print(f"  report {args.user} {name}: posted {category} on {kind} {ident} {why}".rstrip())

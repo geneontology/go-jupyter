@@ -521,7 +521,11 @@ for user in "${TARGETS[@]}"; do
             forwarded=$((forwarded + 1))
             ended="$r_ended"; [ "$ev" = SessionEnd ] && ended=1
             turns="$(hook_turns "$sid" "$f")"
-            printf '%s %s %s %s 0\n' "$mtime" "$size" "$ended" "$turns" > "$rec_dir/$sid"
+            # An open session's transcript is touched every couple of hours
+            # with nothing new (the hook then emits no turn); a turn already
+            # seen in Langfuse stays seen rather than being looked for again.
+            v=0; [ "$turns" = "${r_turns:-0}" ] && [ "${r_verified:-0}" -eq 1 ] && v=1
+            printf '%s %s %s %s %s\n' "$mtime" "$size" "$ended" "$turns" "$v" > "$rec_dir/$sid"
         else
             failures=$((failures + 1))
             if [ "$rc" -eq 124 ]; then why="timeout after ${HOOK_TIMEOUT}s"

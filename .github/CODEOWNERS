@@ -1,23 +1,14 @@
-# Code owners for go-jupyter. Owners are auto-requested for review on PRs that
-# touch their paths, and an owner's approval is required to merge.
+# Code owners for go-jupyter. The one owner is auto-requested for review on
+# every PR; main carries no branch protection, so nothing here is required
+# to merge.
 #
 # Order matters: the LAST matching pattern wins for a given file, and its owners
 # are alternatives (any one of them can clear it). Rules do NOT accumulate per
 # file — but a PR must satisfy the winning rule of every file it touches, so a
 # PR spanning a skill and a terraform file still needs @kltm.
 
-# Default owner for the repo (infra/config): hub config, terraform, systemd,
-# scripts, CI, and this file.
+# Everything, including the curator-facing templates, is reviewed by the repo
+# owner alone. No other person is auto-requested for review here (kltm,
+# 2026-10-18): curator review of template wording happens by invitation on a
+# PR, never by this file.
 *                                                   @kltm
-
-# Curator-authored content — skills, template docs, exercises, news, and the
-# prose trees: the GO-CAM skills editor-in-chief or the repo owner reviews.
-/user-templates/                                    @pgaudet @kltm
-
-# ...except environment config inside the templates: that is infrastructure,
-# not curator content. `**` rather than `*` on purpose — `**` matches zero or
-# more directory levels, so a nested copy cannot slip under the content rule.
-/user-templates/**/.mcp.json                        @kltm
-/user-templates/**/.bashrc                          @kltm
-/user-templates/**/.profile                         @kltm
-/user-templates/**/.claude/settings.json            @kltm

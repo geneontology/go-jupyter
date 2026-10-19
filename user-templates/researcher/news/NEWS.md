@@ -6,6 +6,20 @@ way.
 
 ---
 
+## 2026-10-18 — Two new commands: /report and /summary
+
+- **`/report`** is your channel to the people who run this hub and maintain
+  the skills. Say what happened, what annoyed you, what you wish existed, or
+  what went well, in your own words; Claude records it, tied to the moment in
+  the session it refers to, and offers to open an issue only when there is
+  something concrete to fix. The operators read these next to the session
+  traces.
+- **`/summary`** shows what the session actually did, read from the session
+  transcript rather than from Claude's memory: GO-CAM model writes (which
+  model, which operation, which server), drop-box pull requests, commits,
+  files written, and then what was looked up. The same summary is saved
+  under `~/.go-jupyter/summaries/` when a session ends. Ask for it before you
+  leave, or whenever you want to check what was done in your name.
 ## 2026-10-18 — Usage notice: session traces also go to an external analysis service
 
 One sentence added to the notice you saw at first login (and in the welcome

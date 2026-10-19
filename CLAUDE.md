@@ -190,8 +190,11 @@ this file for the operating rules.
   `/tmp` (`jupyterhub-systemdspawner`, `isolate_tmp`), after a leftover
   `/tmp/req.json` from one curator was posted to noctua-dev by another's
   session. The account boundary itself is unchanged (`disable_user_sudo` is
-  off: its `NoNewPrivileges` breaks `ping`), and a spawner change restarts
-  every server.
+  off: its `NoNewPrivileges` breaks `ping`). Since 2026-10-18 the hub keeps
+  running servers across its own restarts (`cleanup_servers = False`), so a
+  spawner change reaches a server only when it is next started; to push one
+  to everyone, stop the units deliberately after checking who is active
+  (README, "Operating notes").
 
 ## Backends
 

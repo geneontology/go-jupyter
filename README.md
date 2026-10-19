@@ -122,10 +122,19 @@ cloud-init (never committed, never in the repo's history):
 
 ## Operating notes
 
-- **A hub restart ends every running single-user server**, including open
-  terminals and any `claude` session inside them (files on disk are safe). The
-  runtime helpers `go-jupyter-add-user` and `go-jupyter-remove-user` both end in
-  a restart, so run them between sessions, not during one.
+- **A hub restart leaves running single-user servers alone** (since
+  `cleanup_servers = False`, October 2026): the hub re-adopts the units its
+  database knows when it comes back, so `go-jupyter-update`,
+  `go-jupyter-add-user` and `go-jupyter-remove-user` no longer end anyone's
+  terminal or `claude` session. The other side of that: a change to what the
+  spawner injects (environment, `isolate_tmp`, the token hand-off) reaches a
+  user's server only when that server is next started. To push one to
+  everyone, stop the servers deliberately, after checking who is active
+  (`systemctl list-units 'jupyter-*'` says who is up; the last real turn in
+  their transcripts says who is working, since Claude Code touches an idle
+  transcript every couple of hours): `systemctl stop
+  'jupyter-*-singleuser.service'`, or one user's unit. Files on disk are
+  safe either way; a stopped server's private `/tmp` is gone.
 - **Each user's server is a transient systemd unit with a private `/tmp`
   (since #95, October 2026).** `jupyterhub-systemdspawner` with `isolate_tmp`
   starts every server as `jupyter-<user>-singleuser` under `PrivateTmp`, after
@@ -148,10 +157,9 @@ cloud-init (never committed, never in the repo's history):
   - The spawner's `disable_user_sudo` is off: its `NoNewPrivileges` also
     drops file capabilities, which breaks `ping` on Ubuntu 24.04. Nothing
     about setuid changes from before; no curator has sudo anyway.
-  - The hub still stops every unit as it shuts down (`cleanup_servers`), so a
-    restart ends everything as before, and a hub that starts while units are
-    running reconnects to the ones its database knows. A hub that is killed
-    rather than stopped leaves the units running:
+  - The hub no longer stops the units as it shuts down (`cleanup_servers`
+    is off, see above) and reconnects to the ones its database knows when it
+    starts. To stop them all by hand:
     `systemctl stop 'jupyter-*-singleuser.service'` (the `.service` suffix
     matters: a glob without it matches nothing and exits 0).
   - Verify after the deploying restart, once someone has spawned:

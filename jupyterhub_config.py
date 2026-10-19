@@ -657,11 +657,19 @@ if IS_ROOT:
     # disable_user_sudo is off on purpose: its NoNewPrivileges would also
     # drop file capabilities, which breaks `ping` on Ubuntu 24.04 (review of
     # #96), and no curator has sudo to begin with. Everything set on
-    # c.Spawner above still applies. Changing any of this restarts every
-    # server (README, "Operating notes").
+    # c.Spawner above still applies. A change here reaches a user's server
+    # when that server is next started (README, "Operating notes").
     c.JupyterHub.spawner_class = 'systemd'
     c.SystemdSpawner.isolate_tmp = True
     c.SystemdSpawner.disable_user_sudo = False
+    # The hub leaves the single-user units running when it stops and
+    # re-adopts them from its database when it starts (JupyterHub default:
+    # stop them all). A hub restart for a config change, go-jupyter-update
+    # or go-jupyter-add-user therefore no longer ends every curator's
+    # session; a change that must reach running servers is applied by
+    # stopping them deliberately, after checking who is active (2026-10-18:
+    # a restart took 10 idle servers down).
+    c.JupyterHub.cleanup_servers = False
 else:
     # Local dev: no user isolation, runs as current user. Keep
     # FirstUseAuthenticator — PAM needs root and the dev path doesn't

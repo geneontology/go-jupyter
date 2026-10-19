@@ -11,7 +11,8 @@ if [[ $- == *i* ]] && [ -t 0 ]; then
   echo "  ╚══════════════════════════════════════════╝"
   echo ""
   echo "  Shared, monitored environment — your activity and usage traces/logs"
-  echo "  may be reviewed to analyze and improve the service."
+  echo "  may be reviewed to analyze and improve the service; session traces are"
+  echo "  also stored in an external analysis service (Langfuse)."
 
   # What's new — only the entries added since this user last saw the news
   # (entries are the "## " headings in NEWS.md, newest first). The "seen"

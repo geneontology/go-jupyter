@@ -68,7 +68,7 @@ Four places, and only one of them is a real save.
 * '''Do not edit models you did not create.''' noctua-dev is shared, and the server lets any token edit any model. If you want to try something on someone else's model, ask the agent to make a new model and work on that. If a model of yours looks touched by someone else, ask the agent to compare it with your drop-box copy and tell the operators.
 * '''Check the work.''' The agent says which tool it is using. It can be wrong, and it must not claim to have read a paper from its abstract. Verify before you trust an annotation.
 * '''Each session has its own temporary space.''' Every account is a real user on one shared machine; since 2026-10-15 each session's <code>/tmp</code> is private and emptied when the session ends. Keep anything you want under your home directory.
-* '''This is a shared, monitored environment.''' Session logs and usage traces may be reviewed to improve the service. Do not store personal secrets or anything you would not want examined.
+* '''This is a shared, monitored environment.''' Session logs and usage traces may be reviewed to improve the service; session traces are also stored in an external analysis service (Langfuse). Do not store personal secrets or anything you would not want examined.
 
 == What the GO AI hub does ==
 

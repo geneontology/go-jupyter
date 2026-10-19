@@ -153,7 +153,8 @@ TEMPLATE_LABELS = {
 USAGE_NOTICE_TEXT = (
     "This is a shared, monitored environment. Your activity and usage — "
     "including system and session logs and usage traces — may be reviewed to "
-    "analyze and improve the service. Please don't store personal secrets here."
+    "analyze and improve the service. Session traces are also stored in an "
+    "external analysis service (Langfuse). Please don't store personal secrets here."
 )
 
 IS_ROOT = os.getuid() == 0

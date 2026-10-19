@@ -6,6 +6,16 @@ way.
 
 ---
 
+## 2026-10-18 — Usage notice: session traces also go to an external analysis service
+
+One sentence added to the notice you saw at first login (and in the welcome
+banner and README): besides the logs kept on this machine, session traces are
+also stored in an external analysis service, Langfuse, where the operators
+review them to improve the hub and the skills. Nothing else changes; the same
+rule as before applies: don't put personal secrets here.
+
+---
+
 ## 2026-10-15 — Each session now has its own private /tmp
 
 On 2026-10-14 a request file one curator's session had left in `/tmp` was picked

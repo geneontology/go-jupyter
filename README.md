@@ -227,12 +227,16 @@ cloud-init (never committed, never in the repo's history):
   turn's trace (ids are `sha256("<session>:<turn>")[:32]`): the first look
   half an hour after the forward, because ingestion is asynchronous and lags
   for minutes after an outage, the next half an hour after a miss, and only
-  a direct GET of the trace that answers 404 is a miss; after three misses
-  the transcript is listed under `langfuse-state/failed/<user>/`. Looks are
-  paid from Langfuse Cloud's small trace GET bucket (5 a minute on Hobby),
-  so a tick makes at most twelve, 15 s apart: per-account trace listings for
-  the three accounts listed longest ago that have a look due, which settle
-  every record they contain, then direct GETs for the rest. Every generation carries
+  an answered, empty page from Langfuse's v2 observations API
+  (`GET /api/public/v2/observations?traceId=…`, since #117; the trace
+  endpoints it replaced go away on Langfuse Cloud on 2026-11-16) is a miss;
+  after three misses the transcript is listed under
+  `langfuse-state/failed/<user>/`. Looks come out of the general API bucket
+  (30 a minute on Hobby), but a tick still makes at most four, 15 s apart:
+  per-account listings of root observations (one row per trace, bounded to
+  the due records' time range) for the three accounts listed longest ago that
+  have a look due, which settle every record they contain, then direct GETs
+  for the rest. Every generation carries
   the whole earlier conversation as its input, so a long transcript's spans
   grow with its length; a transcript over 1 MB that has never been forwarded
   is therefore shown to the hook in slices of 300 lines, text fields are

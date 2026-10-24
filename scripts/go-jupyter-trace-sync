@@ -59,15 +59,19 @@
 # logged; (3) after a successful run the record holds the hook's turn count,
 # and later ticks look for that turn's trace in Langfuse: the first look
 # LOOK_GAP_SECS after the forward (ingestion is asynchronous and lags for
-# minutes after an outage), the next LOOK_GAP_SECS after a miss, and only a
-# direct GET of the trace id that answers 404 is a miss; after three misses
+# minutes after an outage), the next LOOK_GAP_SECS after a miss, and only
+# an answered, empty page from the v2 observations API (GET /api/public/v2/
+# observations?traceId=<id>; the trace endpoints it replaced are removed
+# from Langfuse Cloud on 2026-11-16, #117) is a miss; after three misses
 # the transcript is logged and listed under <state dir>/failed/<user>/
-# <session> for an operator. Looks are paid for from Langfuse Cloud's small
-# GET bucket (5 a minute on Hobby), so a run makes at most MAX_GETS_PER_RUN
-# of them, GET_GAP_SECS apart: per-account trace listings (newest first, up
-# to 10 pages of 100) for the LISTS_PER_RUN accounts listed longest ago that
-# have a look due, which settle every record they contain for free, then
-# direct GETs for the rest of the due records. Turns the hook has already
+# <session> for an operator. Looks come out of Langfuse Cloud's general API
+# bucket (30 a minute on Hobby), but a run still makes at most
+# MAX_GETS_PER_RUN of them, GET_GAP_SECS apart: per-account listings of root
+# observations (one row per trace, pages of up to 1000 followed by cursor,
+# at most 10, bounded to the due records' time range) for the LISTS_PER_RUN
+# accounts listed longest ago that have a look due, which settle every
+# record they contain for free, then direct GETs for the rest of the due
+# records. Turns the hook has already
 # advanced past cannot be re-sent by this script alone: see
 # scripts/README.md, "Re-sending".
 #
@@ -115,8 +119,8 @@ CHUNK_LINES="${GO_JUPYTER_CHUNK_LINES:-300}"               # lines per slice
 HOOK_TIMEOUT=120
 LOOK_GAP_SECS="${GO_JUPYTER_LOOK_GAP_SECS:-1800}"       # forward -> first look, and miss -> next look
 LISTS_PER_RUN="${GO_JUPYTER_LISTS_PER_RUN:-3}"          # per-account trace listings per tick
-MAX_GETS_PER_RUN="${GO_JUPYTER_MAX_GETS_PER_RUN:-4}"    # listing pages + direct trace GETs per tick: the bucket answered 429 to the fifth
-GET_GAP_SECS="${GO_JUPYTER_GET_GAP_SECS:-15}"           # between GETs: the bucket is 5/min on Hobby
+MAX_GETS_PER_RUN="${GO_JUPYTER_MAX_GETS_PER_RUN:-4}"    # listing pages + direct trace GETs per tick (sized for the old 5/min trace bucket; v2 reads come out of the 30/min general bucket on Hobby)
+GET_GAP_SECS="${GO_JUPYTER_GET_GAP_SECS:-15}"           # between GETs
 
 log() { logger -t go-jupyter-trace-sync -- "$*"; echo "$*"; }
 usage() { echo "usage: sudo go-jupyter-trace-sync [--all | --user <name>] [--dry-run]" >&2; exit 2; }
@@ -299,16 +303,50 @@ due_records() {
         | xargs -r awk '$4 > 0 && $5 <= 0 && $5 > -3 { print FILENAME }' | xargs -r -n1 basename
 }
 
-# page_ids <page file> <ids file>: append the page's trace ids; print totalPages.
+# page_ids <page file> <ids file>: append the page's distinct trace ids; print
+# the next cursor, percent-encoded, or nothing on the last page (the v2
+# observations API returns meta.cursor only when the page was full).
 page_ids() {
-    "$PYTHON" -I - "$1" "$2" <<'PY' 2>/dev/null || echo 1
-import json, sys
+    "$PYTHON" -I - "$1" "$2" <<'PY' 2>/dev/null || echo ""
+import json, sys, urllib.parse
 d = json.load(open(sys.argv[1]))
+seen = set()
 with open(sys.argv[2], "a") as out:
-    for t in d.get("data", []):
-        out.write(str(t["id"]) + "\n")
-print(int((d.get("meta") or {}).get("totalPages") or 1))
+    for o in d.get("data", []):
+        t = str(o.get("traceId") or "")
+        if t and t not in seen:
+            seen.add(t)
+            out.write(t + "\n")
+print(urllib.parse.quote((d.get("meta") or {}).get("cursor") or "", safe=""))
 PY
+}
+
+# lf_look <trace id>: found | miss | <HTTP code> | unparsable. The v2
+# observations API answers 200 with an empty page for a trace it does not
+# have, so a miss is an answered page with no rows, never a 404.
+lf_look() {
+    local f code n
+    f="$(mktemp)"
+    code="$(lf_get "/api/public/v2/observations?traceId=$1&limit=1&fields=core" "$f")"
+    if [ "$code" = 200 ]; then
+        n="$("$PYTHON" -I -c 'import json, sys; print(len(json.load(open(sys.argv[1])).get("data") or []))' "$f" 2>/dev/null || echo x)"
+        case "$n" in 0) code=miss ;; x) code=unparsable ;; *) code=found ;; esac
+    fi
+    command rm -f "$f"
+    printf '%s' "$code"
+}
+
+# list_window <record dir>: time bounds for the account's listing, as query
+# parameters: from two days before the oldest due record's transcript time
+# (observation start times come from the transcript, not from the forward)
+# to a day from now, so the request stays bounded as Langfuse asks; nothing
+# when no bound can be computed.
+list_window() {
+    local oldest
+    oldest="$(due_records "$1" | while read -r r; do awk 'NR == 1 { print $1 }' "$1/$r"; done | sort -n | head -n 1)"
+    case "$oldest" in '' | *[!0-9]*) return 0 ;; esac
+    printf '&fromStartTime=%s&toStartTime=%s' \
+        "$(date -u -d "@$((oldest - 172800))" +%FT%TZ)" "$(date -u -d "@$((now + 86400))" +%FT%TZ)"
 }
 
 # trace_id <session id> <turn>: the deterministic trace id the hook uses.
@@ -431,24 +469,27 @@ for user in "${TARGETS[@]}"; do
     rec_dir="$LF_STATE/state/$user"; fail_dir="$LF_STATE/failed/$user"
     [ "$DRY" -eq 1 ] || install -d -m 0700 "$rec_dir" "$fail_dir"
     scan="$mirror"; [ -d "$scan" ] || scan="$arch/projects"
-    # One listing of the account's traces (newest first, up to 10 pages of
-    # 100, GET_GAP_SECS apart) settles every due record it contains; the
-    # listing is skipped once the run's GET budget is spent, and a refused
-    # page (429, 5xx, no connection) pauses looks for the rest of the run.
+    # One listing of the account's root observations, one row per trace
+    # (pages of up to 1000 followed by cursor, at most 10, GET_GAP_SECS
+    # apart, bounded to the due records' time range), settles every due
+    # record it contains; the listing is skipped once the run's GET budget
+    # is spent, and a refused page (429, 5xx, no connection) pauses looks
+    # for the rest of the run.
     ids_file=""
     case "$LIST_SET" in *" $user "*)
         if [ "$throttled" -eq 0 ] && [ "$gets" -lt "$MAX_GETS_PER_RUN" ]; then
-            lists=$((lists + 1)); ids_file="$(mktemp)"; page=1
+            lists=$((lists + 1)); ids_file="$(mktemp)"; page=1; cursor=""
+            window="$(list_window "$rec_dir")"
             while :; do
                 pace
-                code="$(lf_get "/api/public/traces?userId=$lf_user&limit=100&page=$page" "$ids_file.page")"
+                code="$(lf_get "/api/public/v2/observations?userId=$lf_user&isRootObservation=true&limit=1000&fields=core$window${cursor:+&cursor=$cursor}" "$ids_file.page")"
                 if [ "$code" != 200 ]; then
                     throttled=1; command rm -f "$ids_file.page" "$ids_file"; ids_file=""
                     echo "  looks paused this run: Langfuse answered HTTP $code to a listing"; break
                 fi
-                pages="$(page_ids "$ids_file.page" "$ids_file")"; command rm -f "$ids_file.page"
+                cursor="$(page_ids "$ids_file.page" "$ids_file")"; command rm -f "$ids_file.page"
                 touch "$LF_STATE/listed/$user"
-                [ "$page" -lt "$pages" ] && [ "$page" -lt 10 ] && [ "$gets" -lt "$MAX_GETS_PER_RUN" ] || break
+                [ -n "$cursor" ] && [ "$page" -lt 10 ] && [ "$gets" -lt "$MAX_GETS_PER_RUN" ] || break
                 page=$((page + 1))
             done
         fi ;;
@@ -473,23 +514,24 @@ for user in "${TARGETS[@]}"; do
             # (verified 0 = not yet seen, -N = N misses; a look LOOK_GAP_SECS
             # after the record was last written): found in this run's listing
             # of the account, or else one direct GET of the trace while the
-            # run's budget lasts. Only a 404 is a miss; the third miss is
-            # logged and listed under failed/, and a record with no turn to
-            # look for is left alone.
+            # run's budget lasts. Only an answered page with no rows is a
+            # miss (the v2 endpoint answers 200 either way); the third miss
+            # is logged and listed under failed/, and a record with no turn
+            # to look for is left alone.
             if [ "$DRY" -eq 0 ] && [ "$throttled" -eq 0 ] \
                 && [ "${r_verified:-0}" -le 0 ] && [ "${r_verified:-0}" -gt -3 ] && [ "${r_turns:-0}" -gt 0 ] \
                 && [ $((now - r_written)) -ge "$LOOK_GAP_SECS" ]; then
                 tid="$(trace_id "$sid" "$r_turns")"; code=""
-                if [ -n "$ids_file" ] && grep -qxF "$tid" "$ids_file"; then code=200
+                if [ -n "$ids_file" ] && grep -qxF "$tid" "$ids_file"; then code=found
                 elif [ "$gets" -lt "$MAX_GETS_PER_RUN" ]; then
-                    pace; code="$(lf_get "/api/public/traces/$tid" /dev/null)"
+                    pace; code="$(lf_look "$tid")"
                 fi
                 [ -n "$code" ] || continue   # budget spent: next run
                 case "$code" in
-                    200)
+                    found)
                         checks=$((checks + 1)); verified=$((verified + 1)); command rm -f "$fail_dir/$sid"
                         printf '%s %s %s %s 1\n' "$r_mtime" "$r_size" "$r_ended" "$r_turns" > "$rec_dir/$sid" ;;
-                    404)
+                    miss)
                         checks=$((checks + 1)); n=$(( ${r_verified:-0} - 1 ))
                         printf '%s %s %s %s %s\n' "$r_mtime" "$r_size" "$r_ended" "$r_turns" "$n" > "$rec_dir/$sid"
                         if [ "$n" -le -3 ]; then

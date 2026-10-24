@@ -112,17 +112,23 @@ not recorded, stderr kept in `langfuse-state/hook-stderr.log`. Later ticks
 look for the last turn's trace: the first look `GO_JUPYTER_LOOK_GAP_SECS`
 (1800) after the forward, since Langfuse ingests asynchronously and lagged
 by more than a quarter of an hour after an outage on 2026-10-18, the next
-one the same gap after a miss, and only a direct `GET /api/public/traces/<id>`
-answering 404 counts as a miss; after three the transcript is logged and
-written under `langfuse-state/failed/<user>/<session>`. Langfuse Cloud
-allows only 5 trace GETs a minute on Hobby (15 on Core, 40 on Pro; ingestion
-has its own far larger bucket), so a run makes at most
-`GO_JUPYTER_MAX_GETS_PER_RUN` (12) of them, `GO_JUPYTER_GET_GAP_SECS` (15)
-apart: first per-account trace listings (newest first, up to 10 pages of
-100) for the `GO_JUPYTER_LISTS_PER_RUN` (3) accounts listed longest ago that
-have a look due (`langfuse-state/listed/<user>` is the stamp), each of which
-settles every due record it contains, then direct GETs for the due records
-that remain. A refused request (429, 5xx, no connection) pauses looks for
+one the same gap after a miss, and only an answered, empty page from
+`GET /api/public/v2/observations?traceId=<id>` counts as a miss (since #117;
+the `/api/public/traces` endpoints it replaced are removed from Langfuse
+Cloud on 2026-11-16, and the v2 endpoint answers 200 with no rows for a
+trace it does not have, never 404); after three the transcript is logged and
+written under `langfuse-state/failed/<user>/<session>`. The v2 reads come
+out of Langfuse Cloud's general API bucket (30 a minute on Hobby, 100 on
+Core, 1000 on Pro; ingestion has its own far larger bucket), but a run still
+makes at most `GO_JUPYTER_MAX_GETS_PER_RUN` (4) of them,
+`GO_JUPYTER_GET_GAP_SECS` (15) apart: first per-account listings of root
+observations (`isRootObservation=true`, one row per trace, pages of up to
+1000 followed by `meta.cursor`, at most 10, bounded from two days before the
+oldest due record's transcript time to a day ahead) for the
+`GO_JUPYTER_LISTS_PER_RUN` (3) accounts listed longest ago that have a look
+due (`langfuse-state/listed/<user>` is the stamp), each of which settles
+every due record it contains, then direct GETs for the due records that
+remain. A refused request (429, 5xx, no connection) pauses looks for
 that run; a record with no turn to look for (`turns=0`) is left alone and
 holds no slot. A backlog drains over the following ticks.
 A transcript over 1 MB that has never been forwarded is imported in slices of

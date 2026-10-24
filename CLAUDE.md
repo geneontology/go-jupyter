@@ -145,6 +145,16 @@ this file for the operating rules.
   so it is not the backout. The method and the first repair are on #95. An
   operator's noctua-dev token is needed; it is not on the box and stays out
   of the repo.
+- **Barista keeps its sessions in the barista process (noctua-dev and
+  production alike; `barista.js`, no store), so a barista restart logs every
+  curator out at once.** On the hub that looks like every curator's
+  `noctua barista` commands answering `You are using a bad token; please
+  remove it.` within the same hour; the remedy is each curator fetching a
+  new token from the noctua-dev landing page (the `noctua` skill's token
+  section), not anything on the box. Until noctua#1143 (dev, 2026-10-15) and
+  noctua#1142 (master, 2026-10-22) an authenticated call to an API namespace
+  the barista was not configured for, such as `minerva_public` on dev, the
+  mix-up the skill warns about, crashed barista and caused exactly that.
 - **The drop-box contract is owned by `geneontology/go-cam-drop-box`; the
   skills (in geneontology/go-skills) implement it.** Since 2026-09-24 a submission is `<dev id>.yaml`
   + `<dev id>.ttl` exported from the stored noctua-dev model; the model's state

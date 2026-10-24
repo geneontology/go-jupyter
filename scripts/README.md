@@ -217,8 +217,33 @@ root check, with `GO_JUPYTER_HOME_ROOT`, `GO_JUPYTER_TRACE_ROOT`,
 `GO_JUPYTER_REDACT`, `GO_JUPYTER_REPORT_MARKS`, `GO_JUPYTER_LANGFUSE_ENV`, `GO_JUPYTER_GITHUB_ALLOWLIST`,
 `GO_JUPYTER_LOCK` and `GO_JUPYTER_QUIET_SECS` pointing at your own paths (see
 the script header); `GO_JUPYTER_LOOK_GAP_SECS=0` makes every unverified
-record due at once. Mind that a laptop test shares the project's GET bucket
-with the box's tick: a 429 on either side only pauses that run's looks.
+record due at once. `GO_JUPYTER_REDACT` must be a Python script (the mirror
+step runs it as `$PYTHON -I "$REDACT" <in> <out>`): point it at the repo's
+`scripts/go-jupyter-redact-transcript`, not at a `/bin/true` stand-in, or
+every transcript is logged as `mirror failed` and no look runs. The Langfuse
+side stubs in a few lines of `http.server`: `GET /api/public/projects` → 200
+(the auth probe), `GET /api/public/v2/observations` → with `traceId` one
+row `{"traceId": …}` for a known id and `{"data": []}` otherwise, with
+`userId` a page whose `meta.cursor` is set when there is another page; that
+plus three records (one whose trace the stub knows, one it does not, one
+already verified) exercises listing, cursor paging, a found look, a miss and
+an untouched record in one run (#117). Mind that a laptop test shares the
+project's general API bucket with the box's tick: a 429 on either side only
+pauses that run's looks.
+
+A look is due only half an hour after a record was last written, and an
+active session rewrites its record every tick, so a change to the look
+logic cannot be verified on the box by waiting for the timer. Verify it
+with a state-isolated run instead: copy one quiet account's
+`langfuse-state/state/<user>/` into a scratch directory, rewrite its oldest
+verified record's last field to `0` (and backdate the file), then run the
+installed script with `GO_JUPYTER_ACCOUNTS=<user>`, `GO_JUPYTER_LF_STATE`,
+`GO_JUPYTER_TRACE_ROOT` and `GO_JUPYTER_LOCK` pointing at the scratch
+directory. It reads the real Langfuse project with the real key and writes
+only to the scratch copy; `run done: … listed=1 gets=1 checked=1 verified=1`
+and the record back at `1` is the pass. Remove the scratch directory
+afterwards, since it holds a copy of the account's transcripts (2026-10-23,
+#117).
 
 ## go-jupyter-session-summary — what a session did, from its transcript
 

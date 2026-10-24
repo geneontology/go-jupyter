@@ -254,7 +254,11 @@ cloud-init (never committed, never in the repo's history):
   Verify with `systemctl list-timers 'go-jupyter-trace-sync*'`,
   `journalctl -t go-jupyter-trace-sync` (one summary line per run: accounts,
   archived, forwarded, reports, verified, failures), `ls /var/lib/go-jupyter/traces`
-  and the Langfuse project. Deploying on a running box is by hand
+  and the Langfuse project. The box's key is project-scoped: Langfuse's
+  organization-level endpoints answer it 403, and the plan, billing and
+  Langfuse's own per-project migration status
+  (`<region>.cloud.langfuse.com/v4-migration`) are in the UI, not the API
+  (2026-10-23, #117). Deploying on a running box is by hand
   (`scripts/README.md` has the commands); `go-jupyter-update` would restart
   the hub, which this does not need. Update the vendored hook by replacing the
   file at a newer commit and recording the commit and sha256 in

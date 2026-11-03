@@ -19,4 +19,5 @@ dependencies = [
     # The vendored Langfuse hook (vendor/langfuse/langfuse_hook.py, run by
     # go-jupyter-trace-sync with this venv's python) declares this range.
     "langfuse>=4.7,<5",
+    "jupyterhub-idle-culler>=1.4",
 ]

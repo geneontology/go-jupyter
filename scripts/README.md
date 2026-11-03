@@ -88,6 +88,43 @@ journalctl -t go-jupyter-update-claude      # decisions
 cat /var/log/go-jupyter-claude-updates.log  # applied updates
 ```
 
+## go-jupyter-reset-sessions — the session half of the reset rule
+
+Closes Claude Code sessions that nobody has touched for
+`GO_JUPYTER_RESET_DAYS` days (`/etc/default/go-jupyter`; the same number
+stops idle servers and kernels through `jupyterhub_config.py`; README,
+"The reset rule"). Installed to `/usr/local/sbin` by cloud-init and run
+hourly by `go-jupyter-reset-sessions.timer`. It reads the status file
+Claude Code keeps per running process (`~/.claude/sessions/<pid>.json`:
+`status` idle or busy, `statusUpdatedAt` the last turn, `procStart` the
+process start time) and closes a session only when every check passes: the
+file is a regular file in a directory the account owns, the pid is a live
+`claude` of that account whose start time matches the file (a reused pid
+does not), the status is `idle` and older than the limit, and the process
+has no child but its MCP server and no CPU use over a 5 s sample. A file
+that fails a check is skipped with a log line; an unknown status value or
+a missing field (a Claude Code version that changed the format) is logged
+with the version and skipped, never acted on. Closing is SIGTERM, 60 s for
+the SessionEnd hook (which writes the summary), then SIGKILL; the resume
+command is appended to `~/.go-jupyter/closed-sessions.log` in the home.
+
+```sh
+sudo go-jupyter-reset-sessions --dry-run      # what would close now, and why not
+sudo go-jupyter-reset-sessions --dry-run --days 1   # try another limit
+sudo touch /etc/go-jupyter/hold-reset         # freeze; rm to resume
+journalctl -t go-jupyter-reset-sessions       # every pass (one summary line) and every closure
+cat ~/.go-jupyter/closed-sessions.log         # as the curator: what was closed, how to resume
+```
+
+Adding it to a running box (cloud-init only runs at first boot): add
+`GO_JUPYTER_RESET_DAYS=7` to `/etc/default/go-jupyter`, `install -m 0755
+scripts/go-jupyter-reset-sessions /usr/local/sbin/`, install the two units
+from `systemd/` into `/etc/systemd/system/`, `systemctl daemon-reload`,
+`systemctl enable --now go-jupyter-reset-sessions.timer`; run `--dry-run`
+once and read it. The server and kernel halves arrive with
+`go-jupyter-update` (it runs `uv sync`, which installs
+`jupyterhub-idle-culler`, and restarts the hub).
+
 ## go-jupyter-trace-sync — transcript archive, redaction and Langfuse forwarding
 
 Installed to `/usr/local/sbin` by cloud-init and run every five minutes by

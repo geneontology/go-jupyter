@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 
 config_dir = os.path.dirname(os.path.abspath(__file__))
 venv_bin = os.path.join(config_dir, '.venv', 'bin')
@@ -670,6 +671,46 @@ if IS_ROOT:
     # stopping them deliberately, after checking who is active (2026-10-18:
     # a restart took 10 idle servers down).
     c.JupyterHub.cleanup_servers = False
+
+    # The reset rule (after the 2026-11-02 memory outage: 66 Claude Code
+    # sessions nobody had touched for days, plus 19 servers with their
+    # kernels, filled 16 GB and the 8 GB swap). One number,
+    # GO_JUPYTER_RESET_DAYS in /etc/default/go-jupyter: anything nobody has
+    # touched for that many days is reset.
+    #   * a user server with no browser connected for that long is stopped by
+    #     jupyterhub-idle-culler (a hub-managed service with its own role; a
+    #     service without one gets 403 from the hub API and culls nothing).
+    #     The next visit starts a fresh server. "Touched" is the hub's stored
+    #     last_activity, which a connected browser refreshes and an idle
+    #     claude process in a detached terminal does not;
+    #   * a notebook kernel idle that long with no browser connected is shut
+    #     down by jupyter_server's own culler (outputs stay, it restarts on
+    #     the next run); the args reach a server when it next starts;
+    #   * a Claude Code session with no turn for that long is closed by
+    #     go-jupyter-reset-sessions (scripts/, hourly timer), the same
+    #     SIGTERM a server stop sends, so the SessionEnd summary is written and
+    #     `claude --resume <id>` brings the conversation back.
+    # 0 or empty turns the first two off here (and the third in its script).
+    try:
+        _reset_days = int(float(os.environ.get('GO_JUPYTER_RESET_DAYS', '7').strip() or 0))
+    except ValueError:
+        print(f"GO_JUPYTER_RESET_DAYS={os.environ.get('GO_JUPYTER_RESET_DAYS')!r} is not a number; using 7",
+              file=sys.stderr)
+        _reset_days = 7
+    if _reset_days > 0:
+        _reset_s = _reset_days * 86400
+        c.JupyterHub.services = [{
+            'name': 'idle-culler',
+            'command': [sys.executable, '-m', 'jupyterhub_idle_culler',
+                        f'--timeout={_reset_s}', '--cull-every=3600'],
+        }]
+        c.JupyterHub.load_roles = [{
+            'name': 'idle-culler',
+            'scopes': ['list:users', 'read:users:activity', 'read:servers', 'delete:servers'],
+            'services': ['idle-culler'],
+        }]
+        c.Spawner.args = [f'--MappingKernelManager.cull_idle_timeout={_reset_s}',
+                          '--MappingKernelManager.cull_interval=3600']
 else:
     # Local dev: no user isolation, runs as current user. Keep
     # FirstUseAuthenticator — PAM needs root and the dev path doesn't

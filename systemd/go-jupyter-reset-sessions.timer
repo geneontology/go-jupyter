@@ -1,0 +1,16 @@
+[Unit]
+Description=go-jupyter: hourly pass of the session reset rule
+Documentation=https://github.com/geneontology/go-jupyter#operating-notes
+
+[Timer]
+# Hourly, like the server culler it mirrors (jupyterhub-idle-culler,
+# --cull-every=3600). A tick is one read of every ~/.claude/sessions/*.json
+# and, only when a session is past the limit, a 5 s CPU sample before it is
+# closed. `touch /etc/go-jupyter/hold-reset` freezes it.
+OnBootSec=20min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

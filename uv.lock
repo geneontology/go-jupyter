@@ -543,6 +543,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "jupyterhub" },
     { name = "jupyterhub-firstuseauthenticator" },
+    { name = "jupyterhub-idle-culler" },
     { name = "jupyterhub-multiauthenticator" },
     { name = "jupyterhub-systemdspawner" },
     { name = "jupyterlab" },
@@ -554,6 +555,7 @@ dependencies = [
 requires-dist = [
     { name = "jupyterhub", extras = ["jupyterlab", "notebook"], specifier = ">=5.4.4" },
     { name = "jupyterhub-firstuseauthenticator", specifier = ">=1.1" },
+    { name = "jupyterhub-idle-culler", specifier = ">=1.4" },
     { name = "jupyterhub-multiauthenticator", specifier = ">=0.4" },
     { name = "jupyterhub-systemdspawner", specifier = ">=1.0" },
     { name = "jupyterlab", specifier = ">=4.5.6" },
@@ -953,6 +955,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/17/c5/3fe60733217a17628cd13a5be838f6fff7491b6fbeb3190fc4e4f2a9bac8/jupyterhub_firstuseauthenticator-1.1.1.tar.gz", hash = "sha256:638972df0cf293a5455fa8b0603d41cc054e07d8a49f091417d0d8a36035f32b", size = 11338, upload-time = "2025-03-28T14:32:51.572Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/60/a3/befdc4b8c264953225749ed8f351eaa1805483f247f7653238bf3add2d24/jupyterhub_firstuseauthenticator-1.1.1-py3-none-any.whl", hash = "sha256:39dc6031e46d0567f2033c126388832e2739a672a063add2c84e724b35577a43", size = 10027, upload-time = "2025-03-28T14:32:50.243Z" },
+]
+
+[[package]]
+name = "jupyterhub-idle-culler"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "python-dateutil" },
+    { name = "tornado" },
+    { name = "traitlets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/47/82/f7aa3b53f1c63fb2fe845572cb9aff68a3ebd36d899f704e85caecc462a9/jupyterhub_idle_culler-2.0.0.tar.gz", hash = "sha256:a377454a115eb04da9beec5f8e9b20023f94f0259c12f1a590c44122d4bebd0b", size = 22893, upload-time = "2026-06-16T19:18:13.829Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/47/77/00af75bea2ed7a191349f7d2c84fcfc626c5c6a544607177f092b488bbab/jupyterhub_idle_culler-2.0.0-py3-none-any.whl", hash = "sha256:3273b865404f07ce20dc1f4526208e3d7941a2dfb82bf0bbe822724010a18509", size = 16678, upload-time = "2026-06-16T19:18:12.635Z" },
 ]
 
 [[package]]

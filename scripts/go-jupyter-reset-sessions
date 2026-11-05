@@ -15,7 +15,8 @@ its context.
 
 WHAT IT READS
   Claude Code writes ~/.claude/sessions/<pid>.json for every running process
-  (observed on 2.1.316): pid, sessionId, cwd, status ("idle" or "busy"),
+  (observed on 2.1.316 and 2.1.317): pid, sessionId, cwd, status ("idle",
+  "busy" or "waiting"),
   statusUpdatedAt (epoch ms; equals the last turn, and does not move while the
   session is idle), procStart (the process start time, in clock ticks, equal to
   field 22 of /proc/<pid>/stat), version. The file is removed on a clean exit
@@ -31,8 +32,9 @@ with a log line; nothing aborts the run):
     logged with its version and ignored);
   * /proc/<pid> exists, its comm is "claude", it runs as that account, and its
     start time equals procStart (a reused pid does not match);
-  * status is "idle" (a "busy" session is mid-turn; any other value is logged
-    with the version and skipped);
+  * status is "idle" or "waiting" (a question put to the curator and not
+    answered); a "busy" session is mid-turn; any other value is logged with
+    the version and skipped;
   * statusUpdatedAt is older than N days;
   * no child process other than Claude Code's own uv MCP server, and no CPU
     time consumed over a 5 s sample (belt and braces for a long tool call).
@@ -66,7 +68,8 @@ import time
 HOLD = "/etc/go-jupyter/hold-reset"
 HOME_ROOT = "/home"
 REQUIRED = ("pid", "sessionId", "cwd", "status", "statusUpdatedAt", "procStart", "version")
-KNOWN_STATUS = {"idle", "busy"}
+KNOWN_STATUS = {"idle", "busy", "waiting"}   # observed on 2.1.316/2.1.317; waiting = a question put to the curator, unanswered
+RESETTABLE = {"idle", "waiting"}
 MCP_CHILDREN = {"uv"}          # Claude Code's own stdio MCP server on this box
 MAX_FILE_BYTES = 65536
 CPU_SAMPLE_S = 5
@@ -246,7 +249,7 @@ def scan(days: float, now_ms: int) -> tuple[list[dict], list[dict]]:
                    "sid": str(data["sessionId"]), "cwd": str(data["cwd"]), "idle_s": idle_s,
                    "version": str(data["version"]), "status": status}
             seen.append(rec)
-            if status == "idle" and idle_s >= limit_s:
+            if status in RESETTABLE and idle_s >= limit_s:
                 candidates.append(rec)
     return candidates, seen
 

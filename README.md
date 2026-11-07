@@ -219,6 +219,17 @@ cloud-init (never committed, never in the repo's history):
   `touch /etc/go-jupyter/hold-reset` freezes the session half;
   `go-jupyter-reset-sessions --dry-run` shows what it would close now. No
   alert is wired on purpose: the rule is meant to keep the box up silently.
+  The one other thing that used to reset everyone was an accident, now
+  switched off: Ubuntu's unattended-upgrades runs needrestart after a
+  library upgrade, and needrestart "restarts" each service mapping the old
+  library. A user server is a transient unit, so the restart is a stop that
+  takes every Claude session with it (2026-11-06, 22:24 PST: all 11 servers
+  and 36 sessions, two seconds after an `apt` security update).
+  `etc/needrestart/go-jupyter.conf`, installed as
+  `/etc/needrestart/conf.d/go-jupyter.conf`, tells needrestart to leave
+  `jupyter-*-singleuser` units alone; the hub itself may still be restarted,
+  which servers survive (`cleanup_servers = False`). Check with `needrestart
+  -b -r l`, which lists instead of acting.
 - **Resizing the instance.** `instance_type` is an in-place change for the
   AWS provider (`terraform plan` shows "update in-place", 0 to destroy):
   AWS stops the instance, changes the type and starts it; the Elastic IP,

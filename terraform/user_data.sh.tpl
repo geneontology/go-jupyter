@@ -384,6 +384,13 @@ install -m 0755 "$REPO_DIR/etc/stubs/robot" /usr/local/bin/robot
 # their upstream, and each OAuth account's commit identity is seeded from its
 # GitHub profile at first login (#48).
 install -m 0644 "$REPO_DIR/etc/gitconfig" /etc/gitconfig
+# Ubuntu's unattended-upgrades runs needrestart after a library upgrade, and
+# needrestart "restarts" every service that maps the old library. The curators'
+# servers are transient units, so a restart only stops them, and every Claude
+# Code session inside ends (2026-11-06: all 11 servers at once). The only
+# housekeeping here is the reset rule; needrestart leaves those units alone.
+install -d -m 0755 /etc/needrestart/conf.d
+install -m 0644 "$REPO_DIR/etc/needrestart/go-jupyter.conf" /etc/needrestart/conf.d/go-jupyter.conf
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-git-identity" /usr/local/sbin/go-jupyter-git-identity
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-sync-skills" /usr/local/sbin/go-jupyter-sync-skills
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-sync-skills.service" /etc/systemd/system/go-jupyter-sync-skills.service

@@ -464,15 +464,29 @@ cloud-init (never committed, never in the repo's history):
   answered 200). `web_ingress = "cloudflare"` makes 443 admit only
   Cloudflare's published IPv4 ranges, read from
   `https://www.cloudflare.com/ips-v4` at plan time (a changed list is a diff
-  in the plan; a non-200 answer or fewer than 10 prefixes fails the plan), and
-  removes port 80: the edge answers http itself and talks to the origin on
-  443, and nothing on the box does ACME HTTP-01. The box has no IPv6 address
-  and the proxied record is an A record, so the IPv6 list is not needed; add
-  it if either changes. Verify after an apply: the `--resolve` probe above
-  times out, the login page through the edge is 200, ssh still works (its
-  rule is separate). To look at the origin directly, go through ssh:
-  `curl -sk --resolve jupyter.geneontology.io:443:127.0.0.1
-  https://jupyter.geneontology.io/hub/login` on the box.
+  in the plan; a non-200 answer, a line that is not an IPv4 prefix, or fewer
+  than 10 prefixes fails the plan), and removes port 80: the edge answers
+  http itself and talks to the origin on 443, and nothing on the box does
+  ACME HTTP-01. The box has no IPv6 address and the proxied record is an A
+  record, so the IPv6 list is not needed; add it if either changes.
+  `allowed_web_cidrs` has no effect while this is on, but it is what a
+  rollback restores. Verify after an apply, from outside AWS: `curl -sk
+  --connect-timeout 5 --resolve jupyter.geneontology.io:443:<EIP>
+  https://jupyter.geneontology.io/hub/login` and `curl -s --connect-timeout 5
+  http://<EIP>/` both time out (exit 28); `curl -sI
+  http://jupyter.geneontology.io/` answers a 301 to https from the edge;
+  `https://jupyter.geneontology.io/hub/login` is 200; ssh still works (its
+  rule is separate); `aws ec2 describe-security-groups --group-ids <sg>
+  --query 'SecurityGroups[0].IpPermissions'` shows 22 and 443 only; and an
+  operator opens their own JupyterLab and runs a cell or a terminal command,
+  which is the only check that exercises an authenticated WebSocket through
+  the edge. A probe on the box against `127.0.0.1:443` tells you Caddy and
+  the hub are up; it says nothing about the security group, which loopback
+  never crosses. Rollback: `web_ingress = "cidrs"` in `terraform.tfvars`,
+  `terraform plan -out=<file>`, `terraform apply <file>`; that restores 80
+  and 443 from `allowed_web_cidrs` and needs nothing from Cloudflare. A new
+  Cloudflare prefix would be dropped by the origin until someone re-plans;
+  the list has been 15 prefixes for years, and no watch on it is wired.
 
 ## How a skill change flows
 

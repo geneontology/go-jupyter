@@ -65,9 +65,11 @@ this file for the operating rules.
   2026-11-06): 443 admits only Cloudflare's published IPv4 edge ranges,
   fetched at plan time, and port 80 is closed, so the only way to the hub is
   through the edge and its rules. The plan refuses to proceed if the range
-  list does not answer 200 or parses to fewer than 10 prefixes. Anyone who
-  needs the origin directly (a test with `curl --resolve`) goes through ssh
-  to localhost instead.
+  list does not answer 200, has a line that is not an IPv4 prefix, or parses
+  to fewer than 10 prefixes. Rollback is `web_ingress = "cidrs"`, plan,
+  apply. The verification list and its limits (a loopback probe on the box
+  does not test the security group) are in the README, "The origin answers
+  only Cloudflare".
 - **`prevent_destroy` guards the instance** because a replacement wipes every
   user's `/home` (there is no standing backup). The AMI and `user_data` are
   `ignore_changes` (first-boot-only inputs; cloud-init runs once), so a plain

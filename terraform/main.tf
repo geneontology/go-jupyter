@@ -90,6 +90,8 @@ data "http" "cloudflare_ips_v4" {
   count = var.web_ingress == "cloudflare" ? 1 : 0
   url   = "https://www.cloudflare.com/ips-v4"
 
+  request_timeout_ms = 10000
+
   retry {
     attempts = 2
   }
@@ -103,12 +105,15 @@ data "http" "cloudflare_ips_v4" {
 }
 
 locals {
-  # One CIDR per line; anything that is not a valid IPv4 prefix is dropped.
-  cloudflare_ipv4 = var.web_ingress == "cloudflare" ? [
+  # One CIDR per line. Every non-empty line must be a valid IPv4 prefix: a
+  # line that does not parse (a body cut short, a format change) fails the
+  # plan below instead of being dropped.
+  cloudflare_lines = var.web_ingress == "cloudflare" ? [
     for line in split("\n", data.http.cloudflare_ips_v4[0].response_body) :
-    trimspace(line) if can(cidrnetmask(trimspace(line)))
+    trimspace(line) if trimspace(line) != ""
   ] : []
-  web_cidrs_443 = var.web_ingress == "cloudflare" ? local.cloudflare_ipv4 : var.allowed_web_cidrs
+  cloudflare_ipv4 = [for line in local.cloudflare_lines : line if can(cidrnetmask(line))]
+  web_cidrs_443   = var.web_ingress == "cloudflare" ? local.cloudflare_ipv4 : var.allowed_web_cidrs
 }
 
 resource "aws_security_group" "this" {
@@ -121,6 +126,10 @@ resource "aws_security_group" "this" {
     precondition {
       condition     = var.web_ingress != "cloudflare" || var.fronting == "cloudflare"
       error_message = "web_ingress = \"cloudflare\" admits only Cloudflare's edge on 443, which makes sense only with fronting = \"cloudflare\"."
+    }
+    precondition {
+      condition     = var.web_ingress != "cloudflare" || length(local.cloudflare_ipv4) == length(local.cloudflare_lines)
+      error_message = "A line of https://www.cloudflare.com/ips-v4 is not an IPv4 prefix (body cut short, or the format changed); refusing to plan from it."
     }
     precondition {
       condition     = var.web_ingress != "cloudflare" || length(local.cloudflare_ipv4) >= 10

@@ -53,9 +53,13 @@ variable "allowed_ssh_cidrs" {
 # where Caddy terminates TLS and reverse-proxies to it. See allowed_web_cidrs.
 
 variable "allowed_web_cidrs" {
-  description = "CIDR blocks allowed to reach the public web ports (80, 443) where Caddy terminates TLS and reverse-proxies to JupyterHub on localhost:8000."
+  description = "CIDR blocks allowed to reach the public web ports (80, 443) where Caddy terminates TLS and reverse-proxies to JupyterHub on localhost:8000. Used only when web_ingress = \"cidrs\"; under web_ingress = \"cloudflare\" it has no effect on the live rules, but it is what a rollback to \"cidrs\" restores, so keep it meaningful."
   type        = list(string)
   default     = ["0.0.0.0/0"]
+  validation {
+    condition     = length(var.allowed_web_cidrs) > 0
+    error_message = "allowed_web_cidrs must not be empty: a rollback to web_ingress = \"cidrs\" would close 443 to everyone."
+  }
 }
 
 # Who may reach the web ports at all. "cidrs" is the first-bring-up shape:

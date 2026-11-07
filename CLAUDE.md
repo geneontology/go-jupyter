@@ -48,8 +48,10 @@ this file for the operating rules.
   against the archived transcripts (#28). Update by replacing the file at a
   newer commit; never edit it here.
 - `etc/` — files cloud-init installs verbatim: `gitconfig` (system-wide git:
-  gh as credential helper) and `stubs/` (`docker`, `robot` stand-ins that
-  explain the missing ODK toolchain; delete them when Docker arrives, #74).
+  gh as credential helper), `needrestart/go-jupyter.conf` (needrestart must
+  not "restart" the curators' transient server units; see the operating
+  rules) and `stubs/` (`docker`, `robot` stand-ins that explain the missing
+  ODK toolchain; delete them when Docker arrives, #74).
 
 ## Operating rules
 
@@ -68,7 +70,8 @@ this file for the operating rules.
   second stack, `scripts/go-jupyter-migrate`, repoint, retire (README).
 - **First boot writes things `go-jupyter-update` never touches.** The helpers
   in `/usr/local/sbin`, the systemd units, `/etc/claude-code/managed-settings.json`,
-  `/etc/gitconfig` (from `etc/gitconfig`), `/etc/jupyterhub/jupyterhub.env`
+  `/etc/gitconfig` (from `etc/gitconfig`), `/etc/needrestart/conf.d/go-jupyter.conf`
+  (from `etc/needrestart/`), `/etc/jupyterhub/jupyterhub.env`
   (including the generated `JUPYTERHUB_CRYPT_KEY`), `/etc/default/go-jupyter`
   (backend, `GO_JUPYTER_ALLOWLIST_AUTHORIZATION` and `GO_JUPYTER_RESET_DAYS`),
   `go-jupyter-reset-sessions` with its service and timer, `go-jupyter-trace-sync`, `go-jupyter-redact-transcript` and
@@ -93,6 +96,9 @@ this file for the operating rules.
   limits and alerts: the box is meant to stay up silently, and the only
   tuning is lowering the number or raising the instance size. Do not add
   a second mechanism or an alert without that decision being revisited.
+  The accidental second mechanism, needrestart stopping every transient
+  server unit (and the sessions in it) after a library security update, is
+  switched off by `etc/needrestart/go-jupyter.conf` (2026-11-06); keep it.
   The session helper acts only on what it can verify (pid, owner, start
   time, a known status value); anything else is logged and skipped, so a
   Claude Code format change makes it do nothing rather than the wrong thing.

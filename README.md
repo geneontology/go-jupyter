@@ -456,6 +456,23 @@ cloud-init (never committed, never in the repo's history):
   `bind_url`, so the proxy listens on all interfaces; only the security group
   (80/443/22) keeps it off the internet. Caddy reaches it at `127.0.0.1:8000`,
   so binding it to loopback is a safe hardening if you tighten further.
+- **The origin answers only Cloudflare (since 2026-11-06, `web_ingress =
+  "cloudflare"`).** With `fronting = "cloudflare"` the hostname resolves to
+  the edge, but until November 2026 the security group also let anyone who
+  knew the Elastic IP and sent the hostname as SNI reach Caddy directly,
+  around every edge rule (`curl --resolve jupyter.geneontology.io:443:<EIP>`
+  answered 200). `web_ingress = "cloudflare"` makes 443 admit only
+  Cloudflare's published IPv4 ranges, read from
+  `https://www.cloudflare.com/ips-v4` at plan time (a changed list is a diff
+  in the plan; a non-200 answer or fewer than 10 prefixes fails the plan), and
+  removes port 80: the edge answers http itself and talks to the origin on
+  443, and nothing on the box does ACME HTTP-01. The box has no IPv6 address
+  and the proxied record is an A record, so the IPv6 list is not needed; add
+  it if either changes. Verify after an apply: the `--resolve` probe above
+  times out, the login page through the edge is 200, ssh still works (its
+  rule is separate). To look at the origin directly, go through ssh:
+  `curl -sk --resolve jupyter.geneontology.io:443:127.0.0.1
+  https://jupyter.geneontology.io/hub/login` on the box.
 
 ## How a skill change flows
 

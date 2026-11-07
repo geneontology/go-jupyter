@@ -58,6 +58,25 @@ variable "allowed_web_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
+# Who may reach the web ports at all. "cidrs" is the first-bring-up shape:
+# 80 and 443 open to allowed_web_cidrs. "cloudflare" closes the bypass path
+# of a Cloudflare-fronted box: 443 accepts only Cloudflare's published IPv4
+# edge ranges (https://www.cloudflare.com/ips-v4, fetched at plan time so a
+# new range shows up as a diff instead of as a silently failing edge), and
+# port 80 is not open at all (the edge answers http itself and talks to the
+# origin on 443; nothing on the box does ACME HTTP-01). The instance has no
+# IPv6 address and the proxied record is an A record, so the IPv6 ranges are
+# not needed; add https://www.cloudflare.com/ips-v6 if either changes.
+variable "web_ingress" {
+  description = "Source of the web ingress rules: 'cidrs' (80 and 443 from allowed_web_cidrs) or 'cloudflare' (443 from Cloudflare's published IPv4 ranges only, no port 80; requires fronting = \"cloudflare\")."
+  type        = string
+  default     = "cidrs"
+  validation {
+    condition     = contains(["cidrs", "cloudflare"], var.web_ingress)
+    error_message = "web_ingress must be 'cidrs' or 'cloudflare'."
+  }
+}
+
 variable "hostname_prefix" {
   description = "Subdomain prefix for the rolling iteration hostname. Combined with the random deployment suffix and route53_zone_name to form a unique hostname per destroy+apply cycle, e.g. 'jupyter-test-d5d48e4b.example.org'. A fresh name each cycle avoids Let's Encrypt's 5/week duplicate-cert limit."
   type        = string

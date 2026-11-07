@@ -50,7 +50,9 @@ this file for the operating rules.
 - `etc/` — files cloud-init installs verbatim: `gitconfig` (system-wide git:
   gh as credential helper), `needrestart/go-jupyter.conf` (needrestart must
   not "restart" the curators' transient server units; see the operating
-  rules) and `stubs/` (`docker`, `robot` stand-ins that explain the missing
+  rules), `jupyter/labconfig/page_config.json` (turns off JupyterLab's
+  "Build Recommended" dialog and Build button, which no curator can act on
+  here) and `stubs/` (`docker`, `robot` stand-ins that explain the missing
   ODK toolchain; delete them when Docker arrives, #74).
 
 ## Operating rules
@@ -80,7 +82,8 @@ this file for the operating rules.
 - **First boot writes things `go-jupyter-update` never touches.** The helpers
   in `/usr/local/sbin`, the systemd units, `/etc/claude-code/managed-settings.json`,
   `/etc/gitconfig` (from `etc/gitconfig`), `/etc/needrestart/conf.d/go-jupyter.conf`
-  (from `etc/needrestart/`), `/etc/jupyterhub/jupyterhub.env`
+  (from `etc/needrestart/`), `/etc/jupyter/labconfig/page_config.json` (from
+  `etc/jupyter/labconfig/`), `/etc/jupyterhub/jupyterhub.env`
   (including the generated `JUPYTERHUB_CRYPT_KEY`), `/etc/default/go-jupyter`
   (backend, `GO_JUPYTER_ALLOWLIST_AUTHORIZATION` and `GO_JUPYTER_RESET_DAYS`),
   `go-jupyter-reset-sessions` with its service and timer, `go-jupyter-trace-sync`, `go-jupyter-redact-transcript` and
@@ -111,6 +114,19 @@ this file for the operating rules.
   The session helper acts only on what it can verify (pid, owner, start
   time, a known status value); anything else is logged and skipped, so a
   Claude Code format change makes it do nothing rather than the wrong thing.
+- **A jupyterlab or jupyter-server upgrade is finished by restarting the
+  running servers.** `go-jupyter-update` installs the new lock and restarts
+  the hub, but each running single-user server keeps the old Python code in
+  memory while it serves the new static assets from disk; on 2026-11-06 that
+  showed up as JupyterLab's "Build Recommended" dialog listing every core
+  package "changed from ~4.6.6 to ~4.5.6" (now suppressed by
+  `etc/jupyter/labconfig/page_config.json`, since no curator can build and
+  the dialog had no useful answer). The fix is the server restart, in a
+  quiet window after checking who is active (`go-jupyter-reset-sessions
+  --dry-run` lists busy sessions): `systemctl stop
+  'jupyter-*-singleuser.service'` ends the old servers and their Claude
+  sessions (summaries written); the next visit starts a server on the new
+  code. Say so in NEWS when the upgrade is user-visible.
 - **A helper ships before the change that feeds it.** The timer runs whatever
   `go-jupyter-link-skills` is installed in `/usr/local/sbin`, within five
   minutes of a merge. If a merge changes both the helper and its input

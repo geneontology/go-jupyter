@@ -391,6 +391,13 @@ install -m 0644 "$REPO_DIR/etc/gitconfig" /etc/gitconfig
 # housekeeping here is the reset rule; needrestart leaves those units alone.
 install -d -m 0755 /etc/needrestart/conf.d
 install -m 0644 "$REPO_DIR/etc/needrestart/go-jupyter.conf" /etc/needrestart/conf.d/go-jupyter.conf
+# JupyterLab's "Build Recommended" dialog is never useful here: the Lab
+# directory is root-owned, so no curator can build, and the installed wheel
+# ships a complete bundle. It appears only when a server started before a
+# jupyterlab upgrade reads the newer assets, and the answer to that is a
+# server restart, not a build. Read by every server at start.
+install -d -m 0755 /etc/jupyter/labconfig
+install -m 0644 "$REPO_DIR/etc/jupyter/labconfig/page_config.json" /etc/jupyter/labconfig/page_config.json
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-git-identity" /usr/local/sbin/go-jupyter-git-identity
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-sync-skills" /usr/local/sbin/go-jupyter-sync-skills
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-sync-skills.service" /etc/systemd/system/go-jupyter-sync-skills.service

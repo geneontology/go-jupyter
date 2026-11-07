@@ -6,6 +6,25 @@ way.
 
 ---
 
+## 2026-11-03 — Things nobody has touched for 7 days are reset
+
+The hub now has one housekeeping rule, after it ran out of memory on
+2026-11-02 under dozens of Claude sessions nobody had used for days:
+
+- A **Claude session** with no turn for 7 days is closed. Its summary is
+  written (`~/.go-jupyter/summaries/`), the conversation is kept, and the
+  exact command to bring it back is in `~/.go-jupyter/closed-sessions.log`
+  (`claude --resume <id>`; plain `claude --continue` resumes only the most
+  recent conversation in the current directory).
+- A **notebook kernel** idle for 7 days with no browser connected is shut
+  down. Outputs stay in the notebook; it restarts when you next run a cell.
+- Your **server** is stopped after 7 days with no browser connected, and
+  starts again on your next visit (about ten seconds). Open terminals do not
+  survive that; files do.
+
+Nothing you touched in the last 7 days is affected. Exiting `claude` when you
+are done with a conversation is still welcome, but not required.
+
 ## 2026-10-18 — Two new commands: /report and /summary
 
 - **`/report`** is your channel to the people who run this hub and maintain

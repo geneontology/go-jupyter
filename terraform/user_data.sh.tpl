@@ -152,6 +152,11 @@ GO_JUPYTER_BACKEND=${backend}
 # person (empty: every entry with a GitHub handle). Read by
 # go-jupyter-refresh-allowlist; change + run it to apply.
 GO_JUPYTER_ALLOWLIST_AUTHORIZATION="${allowlist_authorization}"
+# The reset rule: a user server, a notebook kernel or a Claude Code session
+# nobody has touched for this many days is reset. Read by jupyterhub_config.py
+# (servers, kernels; hub restart to apply) and go-jupyter-reset-sessions
+# (sessions; hourly). 0 turns it off.
+GO_JUPYTER_RESET_DAYS=${reset_days}
 BACKEND_ENV_EOF
 
 # First-party Claude API key for the 'anthropic' backend (only written when
@@ -396,6 +401,16 @@ install -m 0644 "$REPO_DIR/systemd/go-jupyter-update-claude.timer" /etc/systemd/
 mkdir -p /etc/go-jupyter
 systemctl daemon-reload
 systemctl enable --now go-jupyter-update-claude.timer
+
+# The session half of the reset rule (GO_JUPYTER_RESET_DAYS above): close
+# Claude Code sessions nobody has touched for that many days. The server and
+# kernel halves are in jupyterhub_config.py. Hourly; `touch
+# /etc/go-jupyter/hold-reset` freezes it.
+install -m 0755 "$REPO_DIR/scripts/go-jupyter-reset-sessions" /usr/local/sbin/go-jupyter-reset-sessions
+install -m 0644 "$REPO_DIR/systemd/go-jupyter-reset-sessions.service" /etc/systemd/system/go-jupyter-reset-sessions.service
+install -m 0644 "$REPO_DIR/systemd/go-jupyter-reset-sessions.timer" /etc/systemd/system/go-jupyter-reset-sessions.timer
+systemctl daemon-reload
+systemctl enable --now go-jupyter-reset-sessions.timer
 
 # Session traces (#28): every account's ~/.claude/projects is archived under
 # /var/lib/go-jupyter/traces (root-only), and completed turns are forwarded to

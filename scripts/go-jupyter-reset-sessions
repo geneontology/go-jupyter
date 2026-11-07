@@ -1,0 +1,376 @@
+#!/usr/bin/env python3
+"""go-jupyter-reset-sessions — close Claude Code sessions nobody has touched for
+N days (the hub's one reset rule, added after the 2026-11-02 memory outage).
+
+Runs as root on a systemd timer (hourly). The rule it implements is the same
+one the hub applies to user servers (jupyterhub-idle-culler) and to notebook
+kernels (MappingKernelManager culling), with the same number of days, read
+from GO_JUPYTER_RESET_DAYS in /etc/default/go-jupyter: a thing nobody has
+touched for that long is reset. For a Claude session, "touched" means a turn
+in the conversation, and "reset" means the process ends the way it does when a
+server stops: SIGTERM, so Claude Code runs its SessionEnd hook and
+go-jupyter-session-summary writes the session's summary; the transcript stays
+on disk and `claude --resume <session id>` brings the conversation back with
+its context.
+
+WHAT IT READS
+  Claude Code writes ~/.claude/sessions/<pid>.json for every running process
+  (observed on 2.1.316 and 2.1.317): pid, sessionId, cwd, status ("idle",
+  "busy" or "waiting"),
+  statusUpdatedAt (epoch ms; equals the last turn, and does not move while the
+  session is idle), procStart (the process start time, in clock ticks, equal to
+  field 22 of /proc/<pid>/stat), version. The file is removed on a clean exit
+  and left behind by a SIGKILL (the OOM killer), which is why the pid alone is
+  not trusted.
+
+WHAT IT CHECKS before a session is a candidate (each failure skips that file
+with a log line; nothing aborts the run):
+  * /home/<user> is a real directory owned by an account of that name, and so
+    are ~/.claude and ~/.claude/sessions; the status file is a regular file,
+    not a symlink, under 64 KB, named <pid>.json, and parses as JSON with every
+    field above present (a Claude Code version that changes the format is
+    logged with its version and ignored);
+  * /proc/<pid> exists, its comm is "claude", it runs as that account, and its
+    start time equals procStart (a reused pid does not match);
+  * status is "idle" or "waiting" (a question put to the curator and not
+    answered); a "busy" session is mid-turn; any other value is logged with
+    the version and skipped;
+  * statusUpdatedAt is older than N days;
+  * no child process other than Claude Code's own uv MCP server, and no CPU
+    time consumed over a 5 s sample (belt and braces for a long tool call).
+
+WHAT IT DOES with the candidates: SIGTERM to all of them at once, up to
+GRACE seconds for the SessionEnd hook (30 s timeout in the managed settings),
+then SIGKILL to any still alive and to any child of theirs still alive. Each
+closure is logged to the journal and appended, as the exact command that
+brings the session back, to ~/.go-jupyter/closed-sessions.log in the
+curator's home (0600, owned by them).
+
+  touch /etc/go-jupyter/hold-reset   freezes the timer (logged); remove to resume.
+
+Usage: go-jupyter-reset-sessions [--dry-run] [--days N] [--grace SECONDS]
+  --dry-run   decide and report, close nothing
+  --days N    override GO_JUPYTER_RESET_DAYS (default 7)
+  --grace S   seconds to wait after SIGTERM before SIGKILL (default 60)
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import pwd
+import signal
+import stat
+import sys
+import time
+
+HOLD = "/etc/go-jupyter/hold-reset"
+HOME_ROOT = "/home"
+REQUIRED = ("pid", "sessionId", "cwd", "status", "statusUpdatedAt", "procStart", "version")
+KNOWN_STATUS = {"idle", "busy", "waiting"}   # observed on 2.1.316/2.1.317; waiting = a question put to the curator, unanswered
+RESETTABLE = {"idle", "waiting"}
+MCP_CHILDREN = {"uv"}          # Claude Code's own stdio MCP server on this box
+MAX_FILE_BYTES = 65536
+CPU_SAMPLE_S = 5
+TICK = os.sysconf("SC_CLK_TCK")
+
+
+def log(msg: str) -> None:
+    # stdout reaches the journal under the unit's SyslogIdentifier; a tty sees it directly.
+    print(msg, flush=True)
+
+
+# --- /proc helpers ----------------------------------------------------------
+
+def proc_stat_fields(pid: int) -> list[str] | None:
+    """Fields of /proc/<pid>/stat after the (comm) group, so indices match the
+    man page numbering from field 3 on: fields[0] is field 3 (state)."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return None
+    close = raw.rfind(b")")
+    if close < 0:
+        return None
+    return raw[close + 2:].decode("ascii", "replace").split()
+
+
+def proc_comm(pid: int) -> str | None:
+    try:
+        with open(f"/proc/{pid}/comm") as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
+def proc_uid(pid: int) -> int | None:
+    try:
+        return os.stat(f"/proc/{pid}").st_uid
+    except OSError:
+        return None
+
+
+def proc_starttime(pid: int) -> int | None:
+    f = proc_stat_fields(pid)
+    if f is None or len(f) < 20:
+        return None
+    return int(f[19])           # field 22
+
+
+def proc_cputicks(pid: int) -> int | None:
+    f = proc_stat_fields(pid)
+    if f is None or len(f) < 13:
+        return None
+    return int(f[11]) + int(f[12])   # utime + stime, fields 14 and 15
+
+
+def children_of(parents: set[int]) -> dict[int, list[tuple[int, str]]]:
+    """pid -> [(child pid, child comm)] for every pid in `parents`, one pass over /proc."""
+    out: dict[int, list[tuple[int, str]]] = {p: [] for p in parents}
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        cpid = int(name)
+        f = proc_stat_fields(cpid)
+        if f is None or len(f) < 2:
+            continue
+        ppid = int(f[1])         # field 4
+        if ppid in out:
+            out[ppid].append((cpid, proc_comm(cpid) or "?"))
+    return out
+
+
+def alive(pid: int) -> bool:
+    return os.path.isdir(f"/proc/{pid}")
+
+
+# --- the scan ---------------------------------------------------------------
+
+def owned_dir(path: str, uid: int) -> bool:
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and st.st_uid == uid
+
+
+def read_status_file(path: str) -> dict | str:
+    """The parsed status file, or a short reason string."""
+    try:
+        st = os.lstat(path)
+    except OSError as e:
+        return f"unreadable ({e.strerror})"
+    if not stat.S_ISREG(st.st_mode):
+        return "not a regular file"
+    if st.st_size > MAX_FILE_BYTES:
+        return f"too large ({st.st_size} bytes)"
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as e:
+        return f"cannot open ({e.strerror})"
+    try:
+        with os.fdopen(fd, "rb") as fh:
+            data = json.loads(fh.read(MAX_FILE_BYTES + 1))
+    except (OSError, ValueError) as e:
+        return f"not JSON ({e})"
+    if not isinstance(data, dict):
+        return "JSON is not an object"
+    missing = [k for k in REQUIRED if k not in data]
+    if missing:
+        return f"missing {', '.join(missing)} (claude {data.get('version', '?')})"
+    return data
+
+
+def scan(days: float, now_ms: int) -> tuple[list[dict], list[dict]]:
+    """Return (candidates, seen). Each entry: user, uid, gid, home, pid, sid, cwd,
+    idle_s, version, status, and for candidates nothing more yet."""
+    seen: list[dict] = []
+    candidates: list[dict] = []
+    limit_s = days * 86400
+    for entry in sorted(os.scandir(HOME_ROOT), key=lambda e: e.name):
+        if not entry.is_dir(follow_symlinks=False):
+            continue
+        user = entry.name
+        try:
+            pw = pwd.getpwnam(user)
+        except KeyError:
+            continue
+        home = entry.path
+        if not owned_dir(home, pw.pw_uid):
+            continue
+        sessions = os.path.join(home, ".claude", "sessions")
+        if not owned_dir(os.path.join(home, ".claude"), pw.pw_uid) or not owned_dir(sessions, pw.pw_uid):
+            continue
+        try:
+            names = sorted(os.listdir(sessions))
+        except OSError:
+            continue
+        for name in names:
+            if not name.endswith(".json") or not name[:-5].isdigit():
+                continue
+            path = os.path.join(sessions, name)
+            data = read_status_file(path)
+            if isinstance(data, str):
+                log(f"skip {user} {name}: {data}")
+                continue
+            pid = data["pid"]
+            if not isinstance(pid, int) or str(pid) != name[:-5]:
+                log(f"skip {user} {name}: pid field {pid!r} does not match the file name")
+                continue
+            if not alive(pid):
+                log(f"skip {user} {name}: no such process (stale file, claude {data['version']})")
+                continue
+            if proc_comm(pid) != "claude":
+                log(f"skip {user} {name}: pid {pid} is {proc_comm(pid)!r}, not claude")
+                continue
+            if proc_uid(pid) != pw.pw_uid:
+                log(f"skip {user} {name}: pid {pid} is not owned by {user}")
+                continue
+            try:
+                proc_start = int(str(data["procStart"]))    # a string in the file ("14042"), an int in /proc
+            except ValueError:
+                log(f"skip {user} {name}: procStart {data['procStart']!r} is not a number (claude {data['version']})")
+                continue
+            if proc_starttime(pid) != proc_start:
+                log(f"skip {user} {name}: pid {pid} start time {proc_starttime(pid)} != procStart {proc_start} (reused pid)")
+                continue
+            status = data["status"]
+            if status not in KNOWN_STATUS:
+                log(f"skip {user} {name}: unknown status {status!r} (claude {data['version']})")
+                continue
+            try:
+                idle_s = (now_ms - int(data["statusUpdatedAt"])) / 1000.0
+            except (TypeError, ValueError):
+                log(f"skip {user} {name}: statusUpdatedAt {data['statusUpdatedAt']!r} is not a number")
+                continue
+            rec = {"user": user, "uid": pw.pw_uid, "gid": pw.pw_gid, "home": home, "pid": pid,
+                   "sid": str(data["sessionId"]), "cwd": str(data["cwd"]), "idle_s": idle_s,
+                   "version": str(data["version"]), "status": status}
+            seen.append(rec)
+            if status in RESETTABLE and idle_s >= limit_s:
+                candidates.append(rec)
+    return candidates, seen
+
+
+def activity_gate(candidates: list[dict]) -> list[dict]:
+    """Drop candidates that have a non-MCP child or burn CPU over a short sample."""
+    if not candidates:
+        return []
+    pids = {c["pid"] for c in candidates}
+    kids = children_of(pids)
+    t0 = {p: proc_cputicks(p) for p in pids}
+    time.sleep(CPU_SAMPLE_S)
+    t1 = {p: proc_cputicks(p) for p in pids}
+    kept = []
+    for c in candidates:
+        p = c["pid"]
+        others = [(k, comm) for k, comm in kids.get(p, []) if comm not in MCP_CHILDREN]
+        if others:
+            log(f"skip {c['user']} pid {p}: child process {others[0][1]} ({others[0][0]}) is running")
+            continue
+        if t0.get(p) is None or t1.get(p) is None:
+            log(f"skip {c['user']} pid {p}: went away during the sample")
+            continue
+        if t1[p] - t0[p] > 0:
+            log(f"skip {c['user']} pid {p}: used CPU during the {CPU_SAMPLE_S} s sample")
+            continue
+        c["children"] = [k for k, _ in kids.get(p, [])]
+        kept.append(c)
+    return kept
+
+
+# --- the action -------------------------------------------------------------
+
+def note_closure(rec: dict, when: dt.datetime, days: float) -> None:
+    """Append the resume command to ~/.go-jupyter/closed-sessions.log, owned by the curator."""
+    gj = os.path.join(rec["home"], ".go-jupyter")
+    try:
+        st = os.lstat(gj)
+    except FileNotFoundError:
+        os.mkdir(gj, 0o700)
+        os.chown(gj, rec["uid"], rec["gid"])
+        st = os.lstat(gj)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != rec["uid"]:
+        log(f"note {rec['user']}: {gj} is not a directory owned by them; not writing the log")
+        return
+    path = os.path.join(gj, "closed-sessions.log")
+    line = (f"{when:%Y-%m-%d %H:%M} UTC  session {rec['sid']}  untouched {rec['idle_s'] / 86400:.1f} days "
+            f"(limit {days:g}), closed; to bring it back:  cd {rec['cwd']} && claude --resume {rec['sid']}\n")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as e:
+        log(f"note {rec['user']}: cannot open {path} ({e.strerror})")
+        return
+    try:
+        os.fchown(fd, rec["uid"], rec["gid"])
+        os.write(fd, line.encode())
+    finally:
+        os.close(fd)
+
+
+def close_sessions(targets: list[dict], grace: int, days: float) -> None:
+    when = dt.datetime.now(dt.timezone.utc)
+    for t in targets:
+        try:
+            os.kill(t["pid"], signal.SIGTERM)
+            log(f"reset {t['user']} pid {t['pid']} session {t['sid']}: untouched {t['idle_s'] / 86400:.1f} days, SIGTERM sent")
+        except ProcessLookupError:
+            log(f"reset {t['user']} pid {t['pid']}: already gone")
+            t["gone"] = True
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline and any(alive(t["pid"]) for t in targets):
+        time.sleep(2)
+    for t in targets:
+        if alive(t["pid"]):
+            try:
+                os.kill(t["pid"], signal.SIGKILL)
+                log(f"reset {t['user']} pid {t['pid']}: still alive after {grace} s, SIGKILL sent")
+            except ProcessLookupError:
+                pass
+        for k in t.get("children", []):
+            if alive(k) and proc_uid(k) == t["uid"]:
+                try:
+                    os.kill(k, signal.SIGKILL)
+                    log(f"reset {t['user']} pid {t['pid']}: child {k} ended")
+                except ProcessLookupError:
+                    pass
+        if not t.get("gone"):
+            note_closure(t, when, days)
+
+
+# --- main -------------------------------------------------------------------
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="close Claude Code sessions untouched for N days")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--days", type=float, default=float(os.environ.get("GO_JUPYTER_RESET_DAYS", "7") or 7))
+    ap.add_argument("--grace", type=int, default=60)
+    args = ap.parse_args()
+    if args.days <= 0:
+        log(f"GO_JUPYTER_RESET_DAYS is {args.days:g}: the reset rule is off")
+        return 0
+    if os.path.exists(HOLD) and not args.dry_run:
+        log(f"hold: {HOLD} exists; nothing closed")
+        return 0
+    if os.getuid() != 0 and not args.dry_run:
+        log("must run as root (or with --dry-run)")
+        return 2
+    now_ms = int(time.time() * 1000)
+    candidates, seen = scan(args.days, now_ms)
+    busy = sum(1 for s in seen if s["status"] == "busy")
+    targets = activity_gate(candidates)
+    log(f"sessions: {len(seen)} running ({busy} busy), {len(candidates)} untouched for {args.days:g}+ days, "
+        f"{len(targets)} to reset{' (dry run)' if args.dry_run else ''}")
+    if args.dry_run:
+        for t in targets:
+            log(f"would reset {t['user']} pid {t['pid']} session {t['sid']}: untouched {t['idle_s'] / 86400:.1f} days (claude {t['version']})")
+        return 0
+    if targets:
+        close_sessions(targets, args.grace, args.days)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

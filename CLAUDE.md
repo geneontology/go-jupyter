@@ -70,7 +70,8 @@ this file for the operating rules.
   in `/usr/local/sbin`, the systemd units, `/etc/claude-code/managed-settings.json`,
   `/etc/gitconfig` (from `etc/gitconfig`), `/etc/jupyterhub/jupyterhub.env`
   (including the generated `JUPYTERHUB_CRYPT_KEY`), `/etc/default/go-jupyter`
-  (backend and `GO_JUPYTER_ALLOWLIST_AUTHORIZATION`), `go-jupyter-trace-sync`, `go-jupyter-redact-transcript` and
+  (backend, `GO_JUPYTER_ALLOWLIST_AUTHORIZATION` and `GO_JUPYTER_RESET_DAYS`),
+  `go-jupyter-reset-sessions` with its service and timer, `go-jupyter-trace-sync`, `go-jupyter-redact-transcript` and
   `go-jupyter-report-marks` with the trace-sync service and timer, `go-jupyter-session-summary` and the
   SessionEnd hook that runs it (in the managed settings), `/etc/go-jupyter/langfuse.env` (from
   `langfuse_env_path`; placed by hand on a running box) and the
@@ -81,6 +82,20 @@ this file for the operating rules.
   any of them. To change one on a running box, change it in the repo *and* put
   the file in place by hand. Edits to `user_data.sh.tpl` reach only boxes built
   after them; the running instance ignores `user_data` drift (see above).
+- **One housekeeping rule, one number (since 2026-11): anything nobody has
+  touched for `GO_JUPYTER_RESET_DAYS` days is reset.** Servers (idle-culler,
+  a hub service with its own role), notebook kernels (`c.Spawner.args`) and
+  Claude sessions (`go-jupyter-reset-sessions`, hourly) all read that one
+  value from `/etc/default/go-jupyter`; README, "The reset rule", has the
+  why and the arithmetic (0.23 GB per session; 7 days is about 28 GB for 20
+  curators, hence the 32 GB instance). Decided by kltm on 2026-11-02 after
+  the memory outage, against per-curator caps, pressure valves, cgroup
+  limits and alerts: the box is meant to stay up silently, and the only
+  tuning is lowering the number or raising the instance size. Do not add
+  a second mechanism or an alert without that decision being revisited.
+  The session helper acts only on what it can verify (pid, owner, start
+  time, a known status value); anything else is logged and skipped, so a
+  Claude Code format change makes it do nothing rather than the wrong thing.
 - **A helper ships before the change that feeds it.** The timer runs whatever
   `go-jupyter-link-skills` is installed in `/usr/local/sbin`, within five
   minutes of a merge. If a merge changes both the helper and its input

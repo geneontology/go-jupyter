@@ -208,6 +208,12 @@ variable "redirect_zone_name" {
   default     = null
 }
 
+variable "reset_days" {
+  description = "The hub's reset rule: a user server, a notebook kernel or a Claude Code session that nobody has touched for this many days is reset (server stopped, kernel shut down, session closed with its summary written; all resumable). Written to /etc/default/go-jupyter as GO_JUPYTER_RESET_DAYS; a hub restart applies a change to servers and kernels, the session timer reads it every hour. 0 turns the rule off."
+  type        = number
+  default     = 7
+}
+
 variable "allowlist_authorization" {
   description = "Key under `authorizations` in go-site users.yaml whose `allow-login: true` admits a person to the hub (GO uses `go-ai-hub`). Empty: every users.yaml entry with a GitHub handle is admitted. Written to /etc/default/go-jupyter; `go-jupyter-refresh-allowlist` applies it hourly and on demand, no restart."
   type        = string

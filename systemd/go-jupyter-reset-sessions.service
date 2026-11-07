@@ -1,0 +1,16 @@
+[Unit]
+Description=go-jupyter: close Claude Code sessions untouched for GO_JUPYTER_RESET_DAYS days
+Documentation=https://github.com/geneontology/go-jupyter#operating-notes
+
+[Service]
+Type=oneshot
+# GO_JUPYTER_RESET_DAYS, the one number behind the hub's reset rule (servers,
+# kernels and Claude sessions alike), lives in /etc/default/go-jupyter.
+EnvironmentFile=-/etc/default/go-jupyter
+ExecStart=/usr/local/sbin/go-jupyter-reset-sessions
+SyslogIdentifier=go-jupyter-reset-sessions
+# A run that closes nothing prints one summary line. A skipped file is a log
+# line, never a failure; the timer keeps ticking.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

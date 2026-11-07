@@ -8,8 +8,17 @@ region              = "us-east-1"
 # vpc_name_tag    = "go-production"
 # subnet_name_tag = "go-production"
 environment         = "test" # short label; combined with a random suffix into the Deployment tag
-instance_type       = "t3.large"
+# Memory is the limit: a Claude Code session costs about 0.23 GB, a user server
+# about 0.2 GB plus its notebook kernels, and curators do not close sessions.
+# GO's box runs r7i.xlarge (32 GB); 16 GB held about 20 curators for three
+# months before filling (2026-11-02). Changing the type later is an in-place
+# stop/start, not a replacement.
+instance_type       = "r7i.xlarge"
 root_volume_size_gb = 100
+# The reset rule: anything nobody has touched for this many days is reset
+# (user server stopped, notebook kernel shut down, Claude Code session closed
+# with its summary written; all resumable). 0 turns it off.
+reset_days          = 7
 
 # Who may sign in: entries in go-site users.yaml with
 # `authorizations.<this key>.allow-login: true`. GO's production box uses

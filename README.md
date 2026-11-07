@@ -188,6 +188,49 @@ cloud-init (never committed, never in the repo's history):
   that look right but are not: those files' mtimes, which idle `claude`
   processes bump every few minutes, and the hub's `last_activity`, which an
   open browser tab keeps fresh by polling.
+- **The reset rule (since November 2026): anything nobody has touched for
+  `GO_JUPYTER_RESET_DAYS` days is reset.** One number, in
+  `/etc/default/go-jupyter` (Terraform `reset_days`, default 7), applied to
+  three things by their own standard mechanisms:
+  - a user server with no browser connected for that long is stopped by
+    `jupyterhub-idle-culler`, a hub-managed service defined in
+    `jupyterhub_config.py` with its own role (without the role JupyterHub 5
+    answers 403 and nothing is culled). The curator's next visit starts a
+    fresh server; terminals are gone, files are not;
+  - a notebook kernel idle that long with no browser connected is shut down
+    by jupyter_server's kernel culler (`c.Spawner.args`); outputs stay and
+    the kernel restarts on the next run. The args reach a server when it
+    next starts, so they arrive as servers cycle;
+  - a Claude Code session with no turn for that long is closed by
+    `go-jupyter-reset-sessions` (hourly timer; `scripts/README.md`) with the
+    SIGTERM a server stop sends, so the SessionEnd hook writes the summary;
+    the transcript stays and the exact `claude --resume <id>` command is
+    appended to `~/.go-jupyter/closed-sessions.log` in the curator's home.
+  Why: on 2026-11-02 the 16 GB box filled with 66 Claude sessions nobody had
+  touched for 2 to 7 days plus 19 servers and their kernels, and hung for two
+  hours. Curators never close sessions (20 of 117 endings in 17 days); the
+  deploy restarts of late October had been clearing them by accident. Each
+  session costs about 0.23 GB, a server about 0.2 GB plus kernels, so the
+  rule bounds the box at one window's worth of use: 7 days is about 28 GB
+  for 20 active curators, which is why GO's box is an r7i.xlarge (32 GB).
+  The number is the only knob: lower it before adding curators, or move up
+  an instance size. Changing it: edit the file, `systemctl restart
+  jupyterhub` for servers and kernels; the session timer reads it hourly.
+  `touch /etc/go-jupyter/hold-reset` freezes the session half;
+  `go-jupyter-reset-sessions --dry-run` shows what it would close now. No
+  alert is wired on purpose: the rule is meant to keep the box up silently.
+- **Resizing the instance.** `instance_type` is an in-place change for the
+  AWS provider (`terraform plan` shows "update in-place", 0 to destroy):
+  AWS stops the instance, changes the type and starts it; the Elastic IP,
+  the root volume and every home stay. About 5 to 10 minutes down, during
+  which every user server ends (the SessionEnd hooks run, summaries are
+  written, nothing on disk is touched); the hub comes back on boot and the
+  next visit starts each curator's server. Sequence: pick a quiet window
+  (`go-jupyter-reset-sessions --dry-run` lists sessions and how many are
+  busy), set `instance_type` in `terraform.tfvars`, `terraform plan
+  -out=<file>` and read it (one change in place, nothing destroyed),
+  `terraform apply <file>`, then verify: ssh, `free -m` shows the new
+  size, `systemctl status jupyterhub`, the login page through the edge.
 - **Session traces: archive, redaction and Langfuse (since #28, October 2026).**
   Every five minutes `go-jupyter-trace-sync.timer` runs `go-jupyter-trace-sync`
   as root. Four steps per seeded account. (1) Archive: rsync of
@@ -285,10 +328,12 @@ cloud-init (never committed, never in the repo's history):
   1. Full `go-jupyter-migrate` while the old hub is still up. Re-running it
      later is safe: it skips accounts that already exist and adds any created
      on the old box since.
-  2. In a quiet window, `systemctl stop jupyterhub` on the old box. The hub
-     stops every `jupyter-<user>-singleuser` unit as it shuts down, and each
-     `claude` process runs inside its unit, so this ends them all and nothing
-     can change there afterwards; `systemctl list-units --no-legend 'jupyter-*'`
+  2. In a quiet window, on the old box, `systemctl stop jupyterhub` and then
+     `systemctl stop 'jupyter-*-singleuser.service'`. Since
+     `cleanup_servers = False` (October 2026) the hub no longer stops the
+     user units when it shuts down, so the second command is what ends every
+     `claude` process (each runs inside its unit) and makes sure nothing can
+     change there afterwards; `systemctl list-units --no-legend 'jupyter-*'`
      must print nothing before the next step.
   3. `go-jupyter-migrate <old-host>` again for the final delta, then
      `go-jupyter-refresh-user --all` on the new box: the rsync brings the old

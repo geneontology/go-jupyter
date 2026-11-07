@@ -10,6 +10,11 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    # Fetches Cloudflare's published edge ranges at plan time (web_ingress = "cloudflare").
+    http = {
+      source  = "hashicorp/http"
+      version = "~> 3.4"
+    }
   }
 
   # Local state for v1. Switch to S3 + DynamoDB lock once the

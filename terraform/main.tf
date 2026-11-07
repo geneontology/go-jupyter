@@ -84,11 +84,58 @@ resource "aws_key_pair" "this" {
   tags       = local.tags
 }
 
+# Cloudflare's edge ranges, read at plan time when web_ingress = "cloudflare".
+# A non-200 answer fails the plan rather than producing an empty allow list.
+data "http" "cloudflare_ips_v4" {
+  count = var.web_ingress == "cloudflare" ? 1 : 0
+  url   = "https://www.cloudflare.com/ips-v4"
+
+  request_timeout_ms = 10000
+
+  retry {
+    attempts = 2
+  }
+
+  lifecycle {
+    postcondition {
+      condition     = self.status_code == 200
+      error_message = "https://www.cloudflare.com/ips-v4 did not answer 200; refusing to plan a security group that could lock the edge out."
+    }
+  }
+}
+
+locals {
+  # One CIDR per line. Every non-empty line must be a valid IPv4 prefix: a
+  # line that does not parse (a body cut short, a format change) fails the
+  # plan below instead of being dropped.
+  cloudflare_lines = var.web_ingress == "cloudflare" ? [
+    for line in split("\n", data.http.cloudflare_ips_v4[0].response_body) :
+    trimspace(line) if trimspace(line) != ""
+  ] : []
+  cloudflare_ipv4 = [for line in local.cloudflare_lines : line if can(cidrnetmask(line))]
+  web_cidrs_443   = var.web_ingress == "cloudflare" ? local.cloudflare_ipv4 : var.allowed_web_cidrs
+}
+
 resource "aws_security_group" "this" {
   name        = local.name
   description = "go-jupyter ${local.deployment}"
   vpc_id      = data.aws_vpc.this.id
   tags        = local.tags
+
+  lifecycle {
+    precondition {
+      condition     = var.web_ingress != "cloudflare" || var.fronting == "cloudflare"
+      error_message = "web_ingress = \"cloudflare\" admits only Cloudflare's edge on 443, which makes sense only with fronting = \"cloudflare\"."
+    }
+    precondition {
+      condition     = var.web_ingress != "cloudflare" || length(local.cloudflare_ipv4) == length(local.cloudflare_lines)
+      error_message = "A line of https://www.cloudflare.com/ips-v4 is not an IPv4 prefix (body cut short, or the format changed); refusing to plan from it."
+    }
+    precondition {
+      condition     = var.web_ingress != "cloudflare" || length(local.cloudflare_ipv4) >= 10
+      error_message = "Cloudflare's IPv4 list parsed to fewer than 10 ranges (it has had 15 for years); refusing to plan an allow list that could lock the edge out."
+    }
+  }
 
   ingress {
     description = "ssh"
@@ -98,20 +145,25 @@ resource "aws_security_group" "this" {
     cidr_blocks = var.allowed_ssh_cidrs
   }
 
-  ingress {
-    description = "http (Caddy / ACME HTTP-01 challenge)"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = var.allowed_web_cidrs
+  # Port 80 exists only in the open shape; a Cloudflare-fronted origin is
+  # spoken to on 443 alone and does no ACME HTTP-01.
+  dynamic "ingress" {
+    for_each = var.web_ingress == "cidrs" ? [1] : []
+    content {
+      description = "http (Caddy / ACME HTTP-01 challenge)"
+      from_port   = 80
+      to_port     = 80
+      protocol    = "tcp"
+      cidr_blocks = var.allowed_web_cidrs
+    }
   }
 
   ingress {
-    description = "https (Caddy reverse proxy to JupyterHub)"
+    description = var.web_ingress == "cloudflare" ? "https from Cloudflare edge ranges only (ips-v4 read at plan time)" : "https (Caddy reverse proxy to JupyterHub)"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = var.allowed_web_cidrs
+    cidr_blocks = local.web_cidrs_443
   }
 
   egress {

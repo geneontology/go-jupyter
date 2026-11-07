@@ -53,9 +53,32 @@ variable "allowed_ssh_cidrs" {
 # where Caddy terminates TLS and reverse-proxies to it. See allowed_web_cidrs.
 
 variable "allowed_web_cidrs" {
-  description = "CIDR blocks allowed to reach the public web ports (80, 443) where Caddy terminates TLS and reverse-proxies to JupyterHub on localhost:8000."
+  description = "CIDR blocks allowed to reach the public web ports (80, 443) where Caddy terminates TLS and reverse-proxies to JupyterHub on localhost:8000. Used only when web_ingress = \"cidrs\"; under web_ingress = \"cloudflare\" it has no effect on the live rules, but it is what a rollback to \"cidrs\" restores, so keep it meaningful."
   type        = list(string)
   default     = ["0.0.0.0/0"]
+  validation {
+    condition     = length(var.allowed_web_cidrs) > 0
+    error_message = "allowed_web_cidrs must not be empty: a rollback to web_ingress = \"cidrs\" would close 443 to everyone."
+  }
+}
+
+# Who may reach the web ports at all. "cidrs" is the first-bring-up shape:
+# 80 and 443 open to allowed_web_cidrs. "cloudflare" closes the bypass path
+# of a Cloudflare-fronted box: 443 accepts only Cloudflare's published IPv4
+# edge ranges (https://www.cloudflare.com/ips-v4, fetched at plan time so a
+# new range shows up as a diff instead of as a silently failing edge), and
+# port 80 is not open at all (the edge answers http itself and talks to the
+# origin on 443; nothing on the box does ACME HTTP-01). The instance has no
+# IPv6 address and the proxied record is an A record, so the IPv6 ranges are
+# not needed; add https://www.cloudflare.com/ips-v6 if either changes.
+variable "web_ingress" {
+  description = "Source of the web ingress rules: 'cidrs' (80 and 443 from allowed_web_cidrs) or 'cloudflare' (443 from Cloudflare's published IPv4 ranges only, no port 80; requires fronting = \"cloudflare\")."
+  type        = string
+  default     = "cidrs"
+  validation {
+    condition     = contains(["cidrs", "cloudflare"], var.web_ingress)
+    error_message = "web_ingress must be 'cidrs' or 'cloudflare'."
+  }
 }
 
 variable "hostname_prefix" {

@@ -31,6 +31,9 @@ ssh_public_key_path = "/home/you/.ssh/go-jupyter.pub"
 # Open for first bring-up. Tighten to a known CIDR before sharing the URL.
 allowed_ssh_cidrs = ["0.0.0.0/0"]
 allowed_web_cidrs = ["0.0.0.0/0"]
+# Behind Cloudflare, close the bypass path: 443 from Cloudflare's edge ranges
+# only (fetched at plan time), no port 80. Requires fronting = "cloudflare".
+# web_ingress = "cloudflare"
 
 # Public DNS + TLS. During iteration leave hostname_override unset: the hostname
 # is computed as ${hostname_prefix}-${random_suffix}.${route53_zone_name} and

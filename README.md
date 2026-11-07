@@ -452,6 +452,20 @@ cloud-init (never committed, never in the repo's history):
   mid-turn; `touch /etc/go-jupyter/hold-claude` freezes it, see `scripts/`).
   Because sessions run on the `opus` and `sonnet` model aliases, this is also how
   curators reach newer models.
+- **After a jupyterlab or jupyter-server upgrade, restart the running
+  servers.** `go-jupyter-update` restarts the hub only; a single-user server
+  started before the upgrade keeps the old code in memory and serves the new
+  assets from disk, which JupyterLab reports as a "Build Recommended" dialog
+  (every core package "changed from" the new version "to" the old). The
+  dialog is turned off by `etc/jupyter/labconfig/page_config.json`
+  (`buildCheck` and `buildAvailable` false; installed to
+  `/etc/jupyter/labconfig/` at first boot, by hand on an older box), because
+  no curator can build (the Lab directory is root-owned) and the installed
+  wheel is complete. The mismatch itself is resolved by restarting the
+  servers in a quiet window: check who is active, `systemctl stop
+  'jupyter-*-singleuser.service'`, and the next visit starts each server on
+  the new code. A curator can do their own from the Hub Control Panel (Stop
+  My Server, Start My Server).
 - **Port 8000 is not loopback-only.** `jupyterhub_config.py` sets no
   `bind_url`, so the proxy listens on all interfaces; only the security group
   (80/443/22) keeps it off the internet. Caddy reaches it at `127.0.0.1:8000`,

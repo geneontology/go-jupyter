@@ -101,9 +101,9 @@ running server; their next sign-in is refused.
 > is shared across users. This is appropriate only for a
 > **controlled, time-boxed workshop on a disposable host with trusted
 > participants**. For anything longer-lived, turn permission prompts back on
-> (remove that flag in `user-templates/*/.bashrc` and
-> `jupyter-data/jupyter_app_launcher/jp_app_launcher.yaml`) and give each user
-> their own backend credential. Hardening this into a safe default is on the
+> (remove that flag in `user-templates/*/.bashrc`; the `jupyter-data/` launcher
+> definition that also carries it is not installed by anything, a leftover of
+> the first release) and give each user their own backend credential. Hardening this into a safe default is on the
 > roadmap.
 
 ## Secrets
@@ -466,6 +466,25 @@ cloud-init (never committed, never in the repo's history):
   'jupyter-*-singleuser.service'`, and the next visit starts each server on
   the new code. A curator can do their own from the Hub Control Panel (Stop
   My Server, Start My Server).
+- **Keeping the box patched: unattended-upgrades covers Ubuntu's own
+  archives only.** Its `Allowed-Origins` (`/etc/apt/apt.conf.d/50unattended-upgrades`)
+  name the Ubuntu and ESM origins; Caddy (`dl.cloudsmith.io`), Node
+  (`deb.nodesource.com`) and `gh` (`cli.github.com`) come from third-party
+  repositories that are never auto-applied, so their security releases wait
+  for an operator: `apt list --upgradable`, then `apt-get upgrade` in a quiet
+  window (on 2026-11-06 39 upgrades had accumulated, Caddy 2.11.4→2.11.9 and
+  Node 22.23.2→22.23.4 among them). needrestart runs afterwards and restarts
+  daemons such as Caddy and the hub, which running servers survive; the
+  server units it lists as deferred (previous bullets). The Python stack is
+  pinned by `uv.lock` and never moves on its own. To check it, ask GitHub's
+  advisory database per package and installed version, `gh api
+  '/advisories?ecosystem=pip&affects=jupyterhub@5.3.0'` (an empty `[]` means
+  nothing open; the hub, jupyterlab, jupyter-server and tornado are the ones
+  that have carried advisories); to move it, raise the floors in
+  `pyproject.toml`, run `uv lock`, read the lock diff, merge, `sudo
+  go-jupyter-update`, then restart the servers (previous bullet). Keep
+  `jupyterhub` below the next major (`<6` since 2026-11-06): a major bump is
+  a config review, not a patch.
 - **Port 8000 is not loopback-only.** `jupyterhub_config.py` sets no
   `bind_url`, so the proxy listens on all interfaces; only the security group
   (80/443/22) keeps it off the internet. Caddy reaches it at `127.0.0.1:8000`,
@@ -501,6 +520,24 @@ cloud-init (never committed, never in the repo's history):
   and 443 from `allowed_web_cidrs` and needs nothing from Cloudflare. A new
   Cloudflare prefix would be dropped by the origin until someone re-plans;
   the list has been 15 prefixes for years, and no watch on it is wired.
+- **The hub log does not say who.** Every request is logged as coming from
+  `127.0.0.1` (Caddy proxies, and the hub has no `trusted_downstream_ips`),
+  and Caddy keeps no access log, so the box cannot say where a request came
+  from. The edge can: Cloudflare's analytics (the GraphQL
+  `httpRequestsAdaptiveGroups` dataset, filtered on host and path; the GO
+  operations repo's `docs/cloudflare-waf.md` has the account and token
+  arrangement) give IP, ASN, country, user agent and bot score per request,
+  sampled, about 30 days back. What that answered on 2026-11-06: the failed
+  `/hub/login` POSTs the hub logs most days since 2026-10-14 as `admin`,
+  `jovyan` and `jupyterhub` are one automated scanner, hosted in AWS, that
+  walks every geneontology.io host with stack-aware probes. They cannot
+  succeed here: the PAM side door is the only password path, and every Unix
+  account on the box is locked (`passwd -S` shows `L` for all 39; sshd has
+  `PasswordAuthentication no`). As of 2026-11-08 no Cloudflare rule
+  challenges or rate-limits `jupyter.geneontology.io` (the account-level
+  rulesets are scoped to the `.org` hosts), so the only thing between the
+  internet and the hub's login form is the form itself; the origin closure
+  above means any rule added at the edge now applies to every request.
 
 ## How a skill change flows
 
@@ -583,6 +620,7 @@ Facts the picture leaves out:
 | `scripts/` | Boot/runtime helpers (skills sync, Claude Code updater, trace sync, user add/refresh/migrate) |
 | `systemd/` | Units for the hub, the skills-sync timer, the Claude Code update timer and the trace-sync timer |
 | `vendor/` | Third-party files installed unmodified: Langfuse's Claude Code hook (`vendor/langfuse/`) |
+| `etc/` | Files cloud-init installs verbatim: system `gitconfig`, the needrestart override, JupyterLab's `labconfig/page_config.json`, the ODK tool stubs |
 | `justfile` | Common operator commands |
 
 ## License

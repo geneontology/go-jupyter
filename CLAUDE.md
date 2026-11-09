@@ -76,8 +76,11 @@ this file for the operating rules.
   user's `/home` (there is no standing backup). The AMI and `user_data` are
   `ignore_changes` (first-boot-only inputs; cloud-init runs once), so a plain
   `terraform plan` stays clean as the template and Canonical's images move on.
-  Anything else that forces replacement (instance type family, subnet, key)
-  turns the plan into an error — read it. A rebuild is a deliberate blue/green:
+  Anything else that forces replacement (subnet, key pair, a CPU architecture
+  change, which needs a different AMI) turns the plan into an error — read it.
+  `instance_type` within x86 is an in-place change (stop, modify, start; the
+  r7i.large→r7i.xlarge resize of 2026-11-06 was one, "1 to change, 0 to
+  destroy"; README, "Resizing the instance"). A rebuild is a deliberate blue/green:
   second stack, `scripts/go-jupyter-migrate`, repoint, retire (README).
 - **First boot writes things `go-jupyter-update` never touches.** The helpers
   in `/usr/local/sbin`, the systemd units, `/etc/claude-code/managed-settings.json`,

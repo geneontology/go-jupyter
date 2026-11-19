@@ -1,0 +1,21 @@
+[Unit]
+Description=go-jupyter: copy the transcript archive to S3
+Documentation=https://github.com/geneontology/go-jupyter/issues/124
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The bucket name comes from /etc/default/go-jupyter, which the script reads
+# itself; the credentials are the instance role's (list and upload only). A
+# failed upload exits 1 (visible in `systemctl status`) and the next night's
+# run uploads what this one did not.
+ExecStart=/usr/local/sbin/go-jupyter-trace-offsite
+# A oneshot unit has no start timeout unless one is set, and the script holds
+# trace-sync's lock while it uploads: a stalled upload would otherwise stop
+# both this copy and trace-sync until someone noticed. A night's upload is
+# minutes; the first one (the whole archive) is well inside this too.
+TimeoutStartSec=3h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

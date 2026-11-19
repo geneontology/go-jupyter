@@ -1,0 +1,16 @@
+[Unit]
+Description=go-jupyter: nightly copy of the transcript archive to S3
+Documentation=https://github.com/geneontology/go-jupyter/issues/124
+
+[Timer]
+# Once a night at 10:30 UTC (02:30 PST, 03:30 PDT), when few curators are on.
+# Until the next run, transcripts written since the last one exist only on the
+# box: at most a day's worth. A run uploads the files that changed (a few
+# hundred MB on a working day). Persistent: a run missed while the box was
+# down happens at the next boot.
+OnCalendar=*-*-* 10:30:00 UTC
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

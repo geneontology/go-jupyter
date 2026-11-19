@@ -89,7 +89,8 @@ this file for the operating rules.
   `etc/jupyter/labconfig/`), `/etc/jupyterhub/jupyterhub.env`
   (including the generated `JUPYTERHUB_CRYPT_KEY`), `/etc/default/go-jupyter`
   (backend, `GO_JUPYTER_ALLOWLIST_AUTHORIZATION` and `GO_JUPYTER_RESET_DAYS`),
-  `go-jupyter-reset-sessions` with its service and timer, `go-jupyter-trace-sync`, `go-jupyter-redact-transcript` and
+  `go-jupyter-reset-sessions` with its service and timer, `go-jupyter-trace-offsite` with its service and timer
+  (and its `GO_JUPYTER_TRACE_ARCHIVE_BUCKET` / `_REGION` lines in `/etc/default/go-jupyter`), `go-jupyter-trace-sync`, `go-jupyter-redact-transcript` and
   `go-jupyter-report-marks` with the trace-sync service and timer, `go-jupyter-session-summary` and the
   SessionEnd hook that runs it (in the managed settings), `/etc/go-jupyter/langfuse.env` (from
   `langfuse_env_path`; placed by hand on a running box) and the
@@ -117,6 +118,18 @@ this file for the operating rules.
   The session helper acts only on what it can verify (pid, owner, start
   time, a known status value); anything else is logged and skipped, so a
   Claude Code format change makes it do nothing rather than the wrong thing.
+- **The transcript archive has an off-box copy, and the box can only add to
+  it (#124, 2026-11).** `go-jupyter-trace-offsite` syncs
+  `/var/lib/go-jupyter/traces` and the forwarding state to the S3 bucket in
+  `terraform/archive.tf` every night. The instance role may list and upload;
+  it has no read, no delete, and the bucket is versioned with nothing
+  expired, so do not add `--delete` to the sync, a lifecycle expiry to the
+  bucket, or read or delete rights to the role. The bucket is `prevent_destroy`
+  and is meant to outlive the instance: a rebuild restores from it (README,
+  "The off-box copy of the archive"). Readers are the account's developers by
+  decision (kltm, 2026-11-18: working records, not secrets, not public), so
+  no named-reader policy; keep transcript content and account names out of
+  issues and PRs all the same.
 - **A jupyterlab or jupyter-server upgrade is finished by restarting the
   running servers.** `go-jupyter-update` installs the new lock and restarts
   the hub, but each running single-user server keeps the old Python code in

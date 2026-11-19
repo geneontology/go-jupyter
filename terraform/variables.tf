@@ -237,6 +237,12 @@ variable "reset_days" {
   default     = 7
 }
 
+variable "trace_archive_bucket" {
+  description = "Name of the S3 bucket that receives the nightly off-box copy of the transcript archive (/var/lib/go-jupyter/traces and the forwarding state), #124. Terraform creates it: private, versioned, encrypted, nothing ever expired; the instance role may list and upload only (no read, no delete). Written to /etc/default/go-jupyter as GO_JUPYTER_TRACE_ARCHIVE_BUCKET, which go-jupyter-trace-offsite reads. Bucket names are global: pick one of your own. Empty: no bucket, and the nightly copy does nothing."
+  type        = string
+  default     = ""
+}
+
 variable "allowlist_authorization" {
   description = "Key under `authorizations` in go-site users.yaml whose `allow-login: true` admits a person to the hub (GO uses `go-ai-hub`). Empty: every users.yaml entry with a GitHub handle is admitted. Written to /etc/default/go-jupyter; `go-jupyter-refresh-allowlist` applies it hourly and on demand, no restart."
   type        = string

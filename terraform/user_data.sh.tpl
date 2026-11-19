@@ -157,6 +157,11 @@ GO_JUPYTER_ALLOWLIST_AUTHORIZATION="${allowlist_authorization}"
 # (servers, kernels; hub restart to apply) and go-jupyter-reset-sessions
 # (sessions; hourly). 0 turns it off.
 GO_JUPYTER_RESET_DAYS=${reset_days}
+# The off-box copy of the transcript archive (#124): the S3 bucket
+# go-jupyter-trace-offsite uploads to every night, and its region. Empty
+# bucket: the nightly copy does nothing.
+GO_JUPYTER_TRACE_ARCHIVE_BUCKET="${trace_archive_bucket}"
+GO_JUPYTER_TRACE_ARCHIVE_REGION="${trace_archive_region}"
 BACKEND_ENV_EOF
 
 # First-party Claude API key for the 'anthropic' backend (only written when
@@ -449,8 +454,14 @@ cat > /etc/go-jupyter/langfuse.env <<'LANGFUSE_ENV_EOF'
 ${langfuse_env}
 LANGFUSE_ENV_EOF
 %{ endif ~}
+# The nightly off-box copy of that archive (#124). Does nothing until
+# GO_JUPYTER_TRACE_ARCHIVE_BUCKET in /etc/default/go-jupyter names a bucket.
+install -m 0755 "$REPO_DIR/scripts/go-jupyter-trace-offsite" /usr/local/sbin/go-jupyter-trace-offsite
+install -m 0644 "$REPO_DIR/systemd/go-jupyter-trace-offsite.service" /etc/systemd/system/go-jupyter-trace-offsite.service
+install -m 0644 "$REPO_DIR/systemd/go-jupyter-trace-offsite.timer" /etc/systemd/system/go-jupyter-trace-offsite.timer
 systemctl daemon-reload
 systemctl enable --now go-jupyter-trace-sync.timer
+systemctl enable --now go-jupyter-trace-offsite.timer
 
 # Caddy: TLS termination + reverse proxy to JupyterHub on localhost:8000.
 # The cloudsmith repo is the official Caddy apt source.

@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# go-jupyter-trace-offsite — copy the transcript archive to S3 (#124).
+#
+# go-jupyter-trace-sync keeps every account's transcripts under
+# /var/lib/go-jupyter/traces and never deletes from it. That archive is the
+# hub's full record; Langfuse shows a window of it. This script is the copy of
+# it that does not live on the instance's disk. Runs as root from
+# go-jupyter-trace-offsite.timer, once a night.
+#
+#   what:   /var/lib/go-jupyter/traces          -> s3://<bucket>/traces/
+#           /var/lib/go-jupyter/langfuse-state  -> s3://<bucket>/langfuse-state/
+#           (the second is what forwarding needs to resume where it stopped
+#           after a rebuild; it holds no keys: those are in /etc/go-jupyter)
+#   where:  GO_JUPYTER_TRACE_ARCHIVE_BUCKET and GO_JUPYTER_TRACE_ARCHIVE_REGION
+#           in /etc/default/go-jupyter. No bucket named: log one line, exit 0.
+#   how:    `aws s3 sync`, never with --delete. A file is uploaded when it is
+#           new, or its size or modification time differ from the bucket's
+#           copy; a transcript that grew is uploaded whole and the bucket,
+#           which is versioned, keeps the copy before it. Nothing here removes
+#           or shortens anything in the bucket, and the instance role could
+#           not if it tried: it may list and upload only (terraform/archive.tf),
+#           which is also why this script cannot read back what it wrote.
+#           Verifying and restoring are done from an operator's machine
+#           (README, "The off-box copy of the archive").
+#   log:    one summary line per run to the journal (-t go-jupyter-trace-offsite):
+#           files uploaded per tree. Object names contain account names, so
+#           they are counted, not logged; a failed upload's own error line is.
+#
+# Exit: 0 when both trees synced (or no bucket is configured); 1 when aws is
+# missing, the credentials do not work, or either sync reported an error. The
+# next night's run uploads whatever this one did not.
+#
+#   --dry-run   show what would be uploaded (counts only); upload nothing
+#
+# Overlapping runs skip (flock). A file trace-sync is writing while it is
+# uploaded lands as it was at that moment and is uploaded again the next night.
+
+set -u
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+DRY=0
+case "${1:-}" in
+    --dry-run) DRY=1 ;;
+    "") ;;
+    -h|--help) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "usage: go-jupyter-trace-offsite [--dry-run]" >&2; exit 2 ;;
+esac
+
+TAG=go-jupyter-trace-offsite
+log() { if [ "$DRY" -eq 1 ] || [ -t 1 ]; then echo "$*"; else logger -t "$TAG" -- "$*"; fi; }
+
+DEFAULTS="${GO_JUPYTER_DEFAULTS:-/etc/default/go-jupyter}"
+# shellcheck disable=SC1090
+[ -r "$DEFAULTS" ] && . "$DEFAULTS"
+BUCKET="${GO_JUPYTER_TRACE_ARCHIVE_BUCKET:-}"
+REGION="${GO_JUPYTER_TRACE_ARCHIVE_REGION:-}"
+TRACE_ROOT="${GO_JUPYTER_TRACE_ROOT:-/var/lib/go-jupyter/traces}"
+LF_STATE="${GO_JUPYTER_LF_STATE:-/var/lib/go-jupyter/langfuse-state}"
+LOCK="${GO_JUPYTER_OFFSITE_LOCK:-/run/lock/go-jupyter-trace-offsite.lock}"
+
+if [ -z "$BUCKET" ]; then
+    log "no GO_JUPYTER_TRACE_ARCHIVE_BUCKET in $DEFAULTS: nothing to do (the archive has no off-box copy)"
+    exit 0
+fi
+case "$BUCKET" in
+    *[!a-z0-9.-]*|s3:*) log "GO_JUPYTER_TRACE_ARCHIVE_BUCKET must be a bare bucket name, got '$BUCKET'"; exit 1 ;;
+esac
+if ! command -v aws >/dev/null 2>&1; then
+    log "aws CLI not found: nothing copied"
+    exit 1
+fi
+
+exec 9>"$LOCK" || { log "cannot open lock $LOCK"; exit 1; }
+if ! flock -n 9; then
+    log "another run holds $LOCK: skipping"
+    exit 0
+fi
+
+region_args=()
+[ -n "$REGION" ] && region_args=(--region "$REGION")
+
+# sync_tree <local dir> <prefix>: sets SYNC_N to the number of files uploaded
+# (or that would be) and returns aws's exit status. Error lines go to the log.
+# Call it directly, not in $( ): log may write to stdout.
+SYNC_N=0
+sync_tree() {
+    local src="$1" prefix="$2" out rc dry=()
+    SYNC_N=0
+    [ "$DRY" -eq 1 ] && dry=(--dryrun)
+    out="$(mktemp)" || return 1
+    # 9>&- : aws must not inherit the lock.
+    aws s3 sync "$src/" "s3://$BUCKET/$prefix/" "${region_args[@]}" "${dry[@]}" \
+        --no-follow-symlinks --no-progress >"$out" 2>&1 9>&-
+    rc=$?
+    SYNC_N="$(grep -cE '^(\(dryrun\) )?upload: ' "$out")"
+    grep -vE '^(\(dryrun\) )?upload: ' "$out" | head -20 | while IFS= read -r line; do
+        [ -n "$line" ] && log "$prefix: $line"
+    done
+    command rm -f "$out"
+    return "$rc"
+}
+
+fail=0; summary=""
+for pair in "$TRACE_ROOT:traces" "$LF_STATE:langfuse-state"; do
+    src="${pair%%:*}"; prefix="${pair##*:}"
+    if [ ! -d "$src" ]; then
+        log "$src does not exist: skipped"
+        summary="$summary $prefix=absent"
+        continue
+    fi
+    sync_tree "$src" "$prefix"; rc=$?
+    [ "$rc" -eq 0 ] || fail=1
+    summary="$summary $prefix=$SYNC_N(rc=$rc)"
+done
+
+verb="uploaded"; [ "$DRY" -eq 1 ] && verb="would upload"
+log "run done: bucket=$BUCKET $verb:$summary failures=$fail"
+exit "$fail"

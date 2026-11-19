@@ -75,6 +75,12 @@ gcp_credentials_json_path = ""
 # Leave empty to archive transcripts on the box without forwarding.
 # langfuse_env_path = "/home/you/.secrets/langfuse.env"
 
+# Off-box copy of the transcript archive (#124): Terraform creates this bucket
+# (private, versioned, nothing expired) and the box uploads to it nightly. The
+# name is global across AWS, so choose your own. Unset: no copy is made, and the
+# archive's only copy is the instance's disk.
+# trace_archive_bucket = "your-org-go-jupyter-trace-archive"
+
 # Out-of-band local users for the PAM (Tier B) authenticator. Created at boot
 # via useradd + chpasswd and added to /etc/jupyterhub/local_users.txt.
 # Operators can also add users at runtime via `sudo go-jupyter-add-user <name>`.

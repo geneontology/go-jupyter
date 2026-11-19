@@ -32,3 +32,8 @@ output "fronting" {
   description = "Fronting mode of this deployment ('direct' or 'cloudflare')."
   value       = var.fronting
 }
+
+output "trace_archive_bucket" {
+  description = "S3 bucket holding the off-box copy of the transcript archive (empty when trace_archive_bucket is unset)."
+  value       = var.trace_archive_bucket
+}

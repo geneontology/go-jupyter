@@ -250,6 +250,8 @@ resource "aws_instance" "this" {
     github_oauth_client_secret = var.github_oauth_client_secret
     allowlist_authorization    = var.allowlist_authorization
     reset_days                 = var.reset_days
+    trace_archive_bucket       = var.trace_archive_bucket
+    trace_archive_region       = var.region
   }))
 
   # Re-run user_data when its inputs change. Changing git_ref / tokens /

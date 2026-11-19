@@ -320,6 +320,46 @@ cloud-init (never committed, never in the repo's history):
   file included) is readable by any account on the box through the instance
   metadata service; that is a pre-existing property of the box tracked
   separately, and the reason the env file is better placed by hand.
+- **The off-box copy of the archive (since #124, November 2026).** Until
+  this existed, `/var/lib/go-jupyter/traces` had one copy, on the instance's
+  disk, and Langfuse on its free tier gives back only the last 30 days (and
+  suspends ingestion past 50,000 units a month). `trace_archive_bucket` names
+  an S3 bucket that Terraform creates (`terraform/archive.tf`): private,
+  versioned, encrypted, with nothing ever expired. Every night at 02:30 PST
+  `go-jupyter-trace-offsite.timer` runs `go-jupyter-trace-offsite`, an
+  `aws s3 sync` (never `--delete`) of the archive to `s3://<bucket>/traces/`
+  and of the forwarding state to `s3://<bucket>/langfuse-state/`. A transcript
+  that grew is uploaded whole and the bucket keeps the version before it.
+  Between runs, at most a day of transcripts exists only on the box.
+  *Who can do what.* The box's role may list and upload, nothing else: it
+  cannot read an object back, delete one, or delete a version, so a
+  compromised hub can neither read nor erase the copy. Readers are whoever
+  the AWS account's own permissions let read S3. The transcripts are working
+  records for the people improving the system: not secrets, not public
+  (decided 2026-11-18).
+  *Verify* on the box with `systemctl list-timers 'go-jupyter-trace-offsite*'`
+  and `journalctl -t go-jupyter-trace-offsite` (one line per run: files
+  uploaded per tree, failures); `go-jupyter-trace-offsite --dry-run` counts
+  what the next run would upload. The box cannot check the copy's content,
+  so that is done from an operator's machine: compare
+  `aws s3 ls --recursive --summarize s3://<bucket>/traces/ | tail -2` with
+  `find /var/lib/go-jupyter/traces -type f | wc -l` and `du -sb` on the box,
+  and compare one object's sha256 with the file's.
+  *Restore* (a rebuilt box, or a lost disk), from a machine that may read the
+  bucket: `aws s3 sync s3://<bucket>/traces/ /var/lib/go-jupyter/traces/` and
+  the same for `langfuse-state/`, then `chown -R root:root` and `chmod 700`
+  on both. An earlier version of a file is `aws s3api list-object-versions
+  --bucket <bucket> --prefix traces/<path>` and `get-object --version-id`.
+  *Rebuilding usage without Langfuse.* Each assistant line of a transcript
+  carries `message.model` and `message.usage` (input, output, cache read and
+  cache creation tokens); summed per model and day they matched Langfuse's
+  own totals when checked for one day in November 2026 (exactly for one
+  model, within a few percent for the other, cause not known). Cost is those
+  tokens times a price table; no dollar figure is stored in a transcript.
+  The script and units are first-boot files: on a running box install them by
+  hand, add `GO_JUPYTER_TRACE_ARCHIVE_BUCKET` and
+  `GO_JUPYTER_TRACE_ARCHIVE_REGION` to `/etc/default/go-jupyter`, and
+  `systemctl enable --now go-jupyter-trace-offsite.timer`.
 - **Session summaries (#29, October 2026).** `go-jupyter-session-summary`
   (in `/usr/local/bin`, runs as the curator) turns a session's transcript
   into a Markdown record of what was done: model writes with id, operation
@@ -618,7 +658,7 @@ Facts the picture leaves out:
 | `jupyterhub_config.py` | Hub auth, spawner, per-user env and home seeding |
 | `user-templates/` | Starter homes (skills, docs, dotfiles) seeded per user |
 | `scripts/` | Boot/runtime helpers (skills sync, Claude Code updater, trace sync, user add/refresh/migrate) |
-| `systemd/` | Units for the hub, the skills-sync timer, the Claude Code update timer and the trace-sync timer |
+| `systemd/` | Units for the hub, the skills-sync timer, the Claude Code update timer, the trace-sync timer and the nightly off-box copy of the archive |
 | `vendor/` | Third-party files installed unmodified: Langfuse's Claude Code hook (`vendor/langfuse/`) |
 | `etc/` | Files cloud-init installs verbatim: system `gitconfig`, the needrestart override, JupyterLab's `labconfig/page_config.json`, the ODK tool stubs |
 | `justfile` | Common operator commands |

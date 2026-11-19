@@ -130,6 +130,33 @@ this file for the operating rules.
   decision (kltm, 2026-11-18: working records, not secrets, not public), so
   no named-reader policy; keep transcript content and account names out of
   issues and PRs all the same.
+- **Which Langfuse organization the hub's project is in decides what you can
+  see (2026-11-18).** GO's traces go to the project `go-ai-hub` on Langfuse
+  Cloud (US host), in the organization "Gene Ontology (Pro)", which holds a
+  research plan. Until that day the project sat in a second organization on
+  the free plan (now "Hobby GO", empty), and two things followed that looked
+  like data loss and were not: the API returned only the last 30 days, and at
+  50,000 units in a billing month Langfuse announced it would suspend
+  ingestion. Moving the project between organizations (kltm, in the Langfuse
+  UI) changed nothing on the box: the key kept working, forwarding did not
+  stop, and history back to July 2026 was returned again. So before
+  concluding that Langfuse has lost or dropped something, ask the key where
+  it lives (`GET /api/public/projects` names the project and its
+  organization) and what plan that organization has. The plan, its unit
+  allowance, credits and billing are visible only in the Langfuse UI:
+  organization-scoped API keys exist on the Enterprise plan only, so a
+  project key answers organization endpoints with 403. The archive and the
+  nightly `langfuse-rows/` export (above) are what make the record
+  independent of any of this.
+- **A flagged delivery check is not yet a known loss (open, 2026-11-18).**
+  `go-jupyter-trace-sync` lists a session under
+  `/var/lib/go-jupyter/langfuse-state/failed/` after three looks that did not
+  find the trace of the last turn the hook reported. On 2026-11-18, 95 of
+  about 750 session records were listed; Langfuse had every one of those
+  sessions but not that turn. One was measured and is a real gap (the day's
+  turns are in the archive and not in Langfuse); whether the rest are lost
+  turns or a difference in how turns are counted is not established (#124).
+  Langfuse's totals may therefore run slightly under the archive's.
 - **A jupyterlab or jupyter-server upgrade is finished by restarting the
   running servers.** `go-jupyter-update` installs the new lock and restarts
   the hub, but each running single-user server keeps the old Python code in

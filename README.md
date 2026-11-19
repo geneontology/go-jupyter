@@ -322,7 +322,9 @@ cloud-init (never committed, never in the repo's history):
   separately, and the reason the env file is better placed by hand.
 - **The off-box copy of the archive (since #124, November 2026).** Until
   this existed, `/var/lib/go-jupyter/traces` had one copy, on the instance's
-  disk, and Langfuse on its free tier gives back only the last 30 days (and
+  disk, and Langfuse on its free tier (where GO's project sat until
+  2026-11-18; it is now in an organization with a research plan) gives back
+  only the last 30 days (and
   suspends ingestion past 50,000 units a month). `trace_archive_bucket` names
   an S3 bucket that Terraform creates (`terraform/archive.tf`): private,
   versioned, encrypted, with nothing ever expired. Every night at 02:30 PST

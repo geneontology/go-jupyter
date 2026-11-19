@@ -89,7 +89,7 @@ this file for the operating rules.
   `etc/jupyter/labconfig/`), `/etc/jupyterhub/jupyterhub.env`
   (including the generated `JUPYTERHUB_CRYPT_KEY`), `/etc/default/go-jupyter`
   (backend, `GO_JUPYTER_ALLOWLIST_AUTHORIZATION` and `GO_JUPYTER_RESET_DAYS`),
-  `go-jupyter-reset-sessions` with its service and timer, `go-jupyter-trace-offsite` with its service and timer
+  `go-jupyter-reset-sessions` with its service and timer, `go-jupyter-trace-offsite` (and `go-jupyter-langfuse-rows`, which it calls) with its service and timer
   (and its `GO_JUPYTER_TRACE_ARCHIVE_BUCKET` / `_REGION` lines in `/etc/default/go-jupyter`), `go-jupyter-trace-sync`, `go-jupyter-redact-transcript` and
   `go-jupyter-report-marks` with the trace-sync service and timer, `go-jupyter-session-summary` and the
   SessionEnd hook that runs it (in the managed settings), `/etc/go-jupyter/langfuse.env` (from

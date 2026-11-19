@@ -11,6 +11,13 @@
 #           /var/lib/go-jupyter/langfuse-state  -> s3://<bucket>/langfuse-state/
 #           (the second is what forwarding needs to resume where it stopped
 #           after a rebuild; it holds no keys: those are in /etc/go-jupyter)
+#           Langfuse's per-turn rows for the last GO_JUPYTER_ROWS_DAYS days
+#           (default 7), one file per UTC day -> s3://<bucket>/langfuse-rows/
+#           (go-jupyter-langfuse-rows writes them; its header says why each
+#           night rewrites whole days). Skipped, with a log line and no
+#           failure, when /etc/go-jupyter/langfuse.env is absent: a box that
+#           forwards nothing to Langfuse has no rows to keep. The keys are
+#           sourced in a subshell around that one process.
 #   where:  GO_JUPYTER_TRACE_ARCHIVE_BUCKET and GO_JUPYTER_TRACE_ARCHIVE_REGION
 #           in /etc/default/go-jupyter. No bucket named: log one line, exit 0.
 #   how:    `aws s3 sync`, never with --delete. A file is uploaded when it is
@@ -63,6 +70,10 @@ BUCKET="${GO_JUPYTER_TRACE_ARCHIVE_BUCKET:-}"
 REGION="${GO_JUPYTER_TRACE_ARCHIVE_REGION:-}"
 TRACE_ROOT="${GO_JUPYTER_TRACE_ROOT:-/var/lib/go-jupyter/traces}"
 LF_STATE="${GO_JUPYTER_LF_STATE:-/var/lib/go-jupyter/langfuse-state}"
+LF_ENV="${GO_JUPYTER_LANGFUSE_ENV:-/etc/go-jupyter/langfuse.env}"
+ROWS_HELPER="${GO_JUPYTER_ROWS_HELPER:-/usr/local/sbin/go-jupyter-langfuse-rows}"
+ROWS_DAYS="${GO_JUPYTER_ROWS_DAYS:-7}"
+PYTHON="${GO_JUPYTER_PYTHON:-python3}"
 LOCK="${GO_JUPYTER_OFFSITE_LOCK:-/run/lock/go-jupyter-trace-offsite.lock}"
 SYNC_LOCK="${GO_JUPYTER_LOCK:-/run/go-jupyter-trace-sync.lock}"
 SYNC_LOCK_WAIT="${GO_JUPYTER_SYNC_LOCK_WAIT:-900}"
@@ -93,9 +104,17 @@ if [ "$DRY" -eq 0 ]; then
     fi
 fi
 
-OUT=""
+OUT=""; ROWS_DIR=""
 cleanup() { if [ -n "$OUT" ]; then unlink "$OUT" 2>/dev/null; fi; }
-trap cleanup EXIT
+# The rows name accounts: the directory is root-only and emptied on any exit.
+cleanup_all() {
+    cleanup
+    if [ -n "$ROWS_DIR" ] && [ -d "$ROWS_DIR" ]; then
+        find "$ROWS_DIR" -type f -delete 2>/dev/null
+        find "$ROWS_DIR" -depth -type d -empty -delete 2>/dev/null
+    fi
+}
+trap cleanup_all EXIT
 
 region_args=()
 [ -n "$REGION" ] && region_args=(--region "$REGION")
@@ -136,6 +155,51 @@ for pair in "$TRACE_ROOT:traces" "$LF_STATE:langfuse-state"; do
     [ "$rc" -eq 0 ] || fail=1
     summary="$summary $prefix=$SYNC_N(rc=$rc)"
 done
+
+# Langfuse's per-turn rows. The helper reads the API and writes day files;
+# they are uploaded with cp, not sync: every file in the directory is a day
+# this run rebuilt, and each is meant to replace the bucket's copy of that day.
+rows_step() {
+    local rc dry=() note
+    if [ ! -r "$LF_ENV" ]; then
+        log "no readable $LF_ENV: no Langfuse rows to export"
+        summary="$summary langfuse-rows=off"
+        return 0
+    fi
+    if [ ! -r "$ROWS_HELPER" ]; then
+        log "$ROWS_HELPER is missing: Langfuse rows not exported"
+        summary="$summary langfuse-rows=no-helper"
+        return 1
+    fi
+    ROWS_DIR="$(mktemp -d)" || return 1
+    chmod 700 "$ROWS_DIR"
+    OUT="$(mktemp)" || return 1
+    # The keys exist only inside this subshell; the locks are not inherited.
+    ( set -a; . "$LF_ENV"; set +a
+      exec "$PYTHON" -I "$ROWS_HELPER" --out "$ROWS_DIR" --days "$ROWS_DAYS" ) >"$OUT" 2>&1 8>&- 9>&-
+    rc=$?
+    note="$(tail -1 "$OUT" | cut -c1-200)"
+    cleanup; OUT=""
+    if [ "$rc" -ne 0 ]; then
+        log "langfuse-rows: export failed (exit $rc): $note"
+        summary="$summary langfuse-rows=export-failed"
+        return 1
+    fi
+    log "langfuse-rows: $note"
+    [ "$DRY" -eq 1 ] && dry=(--dryrun)
+    OUT="$(mktemp)" || return 1
+    aws s3 cp "$ROWS_DIR/" "s3://$BUCKET/langfuse-rows/" --recursive "${region_args[@]}" "${dry[@]}" \
+        --no-progress >"$OUT" 2>&1 8>&- 9>&-
+    rc=$?
+    SYNC_N="$(grep -cE '^(\(dryrun\) )?upload: ' "$OUT")"
+    grep -vE '^(\(dryrun\) )?upload: ' "$OUT" | head -20 | while IFS= read -r line; do
+        [ -n "$line" ] && log "langfuse-rows: $line"
+    done
+    cleanup; OUT=""
+    summary="$summary langfuse-rows=$SYNC_N(rc=$rc)"
+    return "$rc"
+}
+rows_step || fail=1
 
 verb="uploaded"; [ "$DRY" -eq 1 ] && verb="would upload"
 log "run done: bucket=$BUCKET $verb:$summary failures=$fail"

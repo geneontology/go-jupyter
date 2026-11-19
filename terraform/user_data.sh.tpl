@@ -457,6 +457,9 @@ LANGFUSE_ENV_EOF
 # The nightly off-box copy of that archive (#124). Does nothing until
 # GO_JUPYTER_TRACE_ARCHIVE_BUCKET in /etc/default/go-jupyter names a bucket.
 install -m 0755 "$REPO_DIR/scripts/go-jupyter-trace-offsite" /usr/local/sbin/go-jupyter-trace-offsite
+# The same nightly run also keeps Langfuse's per-turn rows (cost included),
+# one file per day, when /etc/go-jupyter/langfuse.env exists.
+install -m 0755 "$REPO_DIR/scripts/go-jupyter-langfuse-rows" /usr/local/sbin/go-jupyter-langfuse-rows
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-trace-offsite.service" /etc/systemd/system/go-jupyter-trace-offsite.service
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-trace-offsite.timer" /etc/systemd/system/go-jupyter-trace-offsite.timer
 systemctl daemon-reload

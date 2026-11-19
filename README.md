@@ -368,7 +368,7 @@ cloud-init (never committed, never in the repo's history):
   and Terraform does not try to create a bucket that exists. The first
   stack's `prevent_destroy` on the bucket then stops a plain `terraform
   destroy` of that stack, on purpose. Before retiring it, hand the bucket
-  over: `terraform state rm` the eight `trace_archive` bucket resources from
+  over: `terraform state rm` the seven `trace_archive` bucket resources from
   the old stack, `terraform import` them into the new one, and set
   `trace_archive_manage_bucket = true` there; a plan should then show no
   change to the bucket. That is state surgery, done by a person.

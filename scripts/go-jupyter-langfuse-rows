@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""go-jupyter-langfuse-rows — write Langfuse's per-turn rows as one file per day (#124).
+
+Langfuse Cloud gives back a limited window of history (30 days on the free
+plan), and its cost figure for a turn exists nowhere else: a transcript holds
+token counts, not dollars. This script reads the project's recent observations
+and writes, for each UTC day, every turn that started that day as one JSON
+line. go-jupyter-trace-offsite runs it each night and uploads the files to
+s3://<bucket>/langfuse-rows/<yyyy>/<mm>/<yyyy-mm-dd>.jsonl.
+
+    go-jupyter-langfuse-rows --out DIR [--days N]
+
+  --out DIR   directory to write into (created; DIR/<yyyy>/<mm>/<day>.jsonl)
+  --days N    how many whole UTC days back to write, today included (default 7)
+
+Environment: LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL (the
+caller sources /etc/go-jupyter/langfuse.env around this process only).
+
+HOW IT STAYS FREE OF DUPLICATES WITHOUT READING THE BUCKET
+  The box may upload to the bucket but not read it, so nothing here asks what
+  was exported before. Each run rewrites the whole file of each day in its
+  window from what Langfuse returns now. A day's file is therefore always the
+  complete set for that day as of its last export; turns that reached Langfuse
+  late are picked up by the next nights' rewrites, and the bucket, which is
+  versioned, keeps each earlier file. A day older than the window is never
+  touched again.
+
+WHAT A ROW IS
+  One line per trace (one turn of a Claude Code session), built from the
+  trace's observations (GET /api/public/v2/observations, cursor paging):
+    id, userId, sessionId      as Langfuse holds them
+    timestamp                  earliest observation startTime (the day it files under)
+    endTime, latency           latest observation endTime; seconds between the two
+    totalCost                  sum of the observations' totalCost (US dollars, as
+                               Langfuse priced them)
+    observationCount
+    models                     per model name: generations, cost, and the sums of
+                               every usageDetails counter Langfuse returned
+  Rows are sorted by timestamp, then id, so two exports of an unchanged day
+  are byte-identical.
+
+WHAT IT REFUSES TO DO
+  * It asks for one day more than it writes, so a turn that began before the
+    window is never written short into the first day.
+  * A day with no rows writes no file: an empty answer never replaces a day
+    that was exported with data.
+  * Any API error other than a 429 (which it waits out, up to 20 times in a
+    row) ends the run with exit 1 and no file written: the files are written
+    only after the last page has been read.
+
+Exit: 0 files written (possibly none); 1 the keys are missing or the API
+failed; 2 usage. The last line on stdout is a summary: days written, turns,
+observations, pages.
+"""
+import argparse
+import base64
+import collections
+import datetime as dt
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+PAGE_LIMIT = 1000
+MAX_PAGES = 2000          # a runaway cursor stops here (2,000,000 observations)
+MAX_429_IN_A_ROW = 20
+
+
+def die(msg, code=1):
+    print(f"go-jupyter-langfuse-rows: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def iso(d):
+    return d.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def parse(s):
+    return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def fetch(host, auth, params, opener=urllib.request.urlopen):
+    """Yield every observation for params, following the cursor."""
+    cursor, pages, waits = None, 0, 0
+    while True:
+        q = dict(params, **({"cursor": cursor} if cursor else {}))
+        req = urllib.request.Request(f"{host}/api/public/v2/observations?{urllib.parse.urlencode(q)}",
+                                     headers={"Authorization": "Basic " + auth})
+        try:
+            page = json.load(opener(req, timeout=120))
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and waits < MAX_429_IN_A_ROW:
+                waits += 1
+                try:
+                    delay = int(e.headers.get("Retry-After") or 15)
+                except ValueError:
+                    delay = 15
+                time.sleep(min(max(delay, 1), 120))
+                continue
+            die(f"Langfuse answered HTTP {e.code} on page {pages + 1}; nothing written")
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as e:
+            die(f"request for page {pages + 1} failed ({type(e).__name__}); nothing written")
+        waits = 0
+        pages += 1
+        data = page.get("data")
+        if not isinstance(data, list):
+            die(f"page {pages} has no data list; nothing written")
+        yield from ((pages, o) for o in data)
+        cursor = (page.get("meta") or {}).get("cursor")
+        if not cursor or not data:
+            return
+        if pages >= MAX_PAGES:
+            die(f"more than {MAX_PAGES} pages; nothing written")
+
+
+def build_rows(observations):
+    """Group observations into one row per trace. Returns (rows, n_observations)."""
+    traces, n = {}, 0
+    for o in observations:
+        tid, start = o.get("traceId"), o.get("startTime")
+        if not tid or not start:
+            continue
+        n += 1
+        t = traces.setdefault(tid, {"user": None, "session": None, "start": None, "end": None,
+                                    "cost": 0.0, "n": 0, "models": {}})
+        t["n"] += 1
+        t["cost"] += o.get("totalCost") or 0
+        t["user"] = t["user"] or o.get("userId")
+        t["session"] = t["session"] or o.get("sessionId")
+        if t["start"] is None or start < t["start"]:
+            t["start"] = start
+        end = o.get("endTime")
+        if end and (t["end"] is None or end > t["end"]):
+            t["end"] = end
+        usage = o.get("usageDetails") or {}
+        if o.get("type") == "GENERATION" or usage:
+            name = o.get("providedModelName") or o.get("model") or "unknown"
+            m = t["models"].setdefault(name, {"generations": 0, "cost": 0.0, "usage": collections.Counter()})
+            m["generations"] += 1
+            m["cost"] += o.get("totalCost") or 0
+            for k, v in usage.items():
+                if isinstance(v, (int, float)):
+                    m["usage"][k] += v
+    rows = []
+    for tid, t in traces.items():
+        latency = max(0.0, (parse(t["end"]) - parse(t["start"])).total_seconds()) if t["end"] else 0.0
+        rows.append({
+            "id": tid, "userId": t["user"], "sessionId": t["session"],
+            "timestamp": t["start"], "endTime": t["end"], "latency": round(latency, 3),
+            "totalCost": round(t["cost"], 8), "observationCount": t["n"],
+            "models": {name: {"generations": m["generations"], "cost": round(m["cost"], 8),
+                              "usage": dict(sorted(m["usage"].items()))}
+                       for name, m in sorted(t["models"].items())},
+        })
+    rows.sort(key=lambda r: (r["timestamp"], r["id"]))
+    return rows, n
+
+
+def write_days(rows, out_dir, first_day):
+    """Write one file per UTC day on or after first_day. Returns {day: n_rows}."""
+    by_day = collections.defaultdict(list)
+    for r in rows:
+        day = r["timestamp"][:10]
+        if day >= first_day:
+            by_day[day].append(r)
+    written = {}
+    for day, day_rows in sorted(by_day.items()):
+        d = os.path.join(out_dir, day[:4], day[5:7])
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, f"{day}.jsonl")
+        with open(path + ".part", "w", encoding="utf-8") as f:
+            for r in day_rows:
+                f.write(json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n")
+        os.replace(path + ".part", path)
+        written[day] = len(day_rows)
+    return written
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="go-jupyter-langfuse-rows", add_help=True,
+                                 description="Write Langfuse's per-turn rows as one file per UTC day.")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--days", type=int, default=7)
+    args = ap.parse_args(argv)
+    if not 1 <= args.days <= 400:
+        die("--days must be between 1 and 400", 2)
+    try:
+        host = os.environ["LANGFUSE_BASE_URL"].rstrip("/")
+        auth = base64.b64encode(
+            f"{os.environ['LANGFUSE_PUBLIC_KEY']}:{os.environ['LANGFUSE_SECRET_KEY']}".encode()).decode()
+    except KeyError as e:
+        die(f"{e.args[0]} is not set")
+    if not host.startswith("https://"):
+        die("LANGFUSE_BASE_URL must be an https:// URL")
+
+    now = dt.datetime.now(dt.timezone.utc)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    first = today - dt.timedelta(days=args.days - 1)
+    params = {"fields": "core,basic,usage,model", "limit": str(PAGE_LIMIT),
+              "fromStartTime": iso(first - dt.timedelta(days=1)),
+              "toStartTime": iso(now + dt.timedelta(hours=1))}
+    pages = 0
+    observations = []
+    for pages, o in fetch(host, auth, params):
+        observations.append(o)
+    rows, n_obs = build_rows(observations)
+    written = write_days(rows, args.out, first.strftime("%Y-%m-%d"))
+    span = f"{min(written)}..{max(written)}" if written else "none"
+    print(f"days={len(written)} ({span}) turns={sum(written.values())} observations={n_obs} pages={pages}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

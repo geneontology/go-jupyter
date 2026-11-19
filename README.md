@@ -331,6 +331,21 @@ cloud-init (never committed, never in the repo's history):
   and of the forwarding state to `s3://<bucket>/langfuse-state/`. A transcript
   that grew is uploaded whole and the bucket keeps the version before it.
   Between runs, at most a day of transcripts exists only on the box.
+  *Langfuse's own rows.* The same run calls `go-jupyter-langfuse-rows`, which
+  reads the project's observations for the last 7 days and writes one file
+  per UTC day, one JSON line per turn (trace id, user, session, start and end,
+  Langfuse's cost, and per model the token counters and cost), to
+  `s3://<bucket>/langfuse-rows/<yyyy>/<mm>/<yyyy-mm-dd>.jsonl`. The cost
+  figure exists nowhere else, and Langfuse stops returning a day once it is
+  older than the plan's window. The box cannot read the bucket, so nothing is
+  compared with earlier exports: each night rewrites the whole file of each
+  of those 7 days (the bucket keeps the earlier versions), which is also how
+  a turn that reached Langfuse late gets in. A day with no rows writes no
+  file, and an API failure writes none at all, so an empty or failed answer
+  never replaces a day already kept. To fetch further back by hand (the first
+  run, or after a gap longer than a week): `GO_JUPYTER_ROWS_DAYS=35
+  go-jupyter-trace-offsite`. Without `/etc/go-jupyter/langfuse.env` the step
+  is skipped and the summary line says `langfuse-rows=off`.
   *Who can do what.* The box's role may list and upload, nothing else: it
   cannot read an object back, delete one, or delete a version, so a
   compromised hub can neither read nor erase the copy. Readers are whoever

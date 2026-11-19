@@ -27,13 +27,20 @@
 #           they are counted, not logged; a failed upload's own error line is.
 #
 # Exit: 0 when both trees synced (or no bucket is configured); 1 when aws is
-# missing, the credentials do not work, or either sync reported an error. The
+# missing, the credentials do not work, a tree does not exist, trace-sync's
+# lock could not be had, or either sync reported an error or a warning. The
 # next night's run uploads whatever this one did not.
 #
 #   --dry-run   show what would be uploaded (counts only); upload nothing
 #
-# Overlapping runs skip (flock). A file trace-sync is writing while it is
-# uploaded lands as it was at that moment and is uploaded again the next night.
+# Locks. Overlapping runs of this script skip (flock on its own lock). For the
+# length of the upload it also holds go-jupyter-trace-sync's lock, waiting up
+# to 15 minutes for a running tick to finish, so no rsync or redaction pass is
+# writing while the tree is read: no half-written or temporary file is
+# uploaded, and none vanishes mid-run (which aws reports as a warning and a
+# non-zero exit). trace-sync's ticks during the upload skip, as they do for
+# any held lock, and catch up on the next one. The unit's TimeoutStartSec ends
+# a run that hangs, so a stuck upload cannot hold either lock for longer.
 
 set -u
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -57,6 +64,8 @@ REGION="${GO_JUPYTER_TRACE_ARCHIVE_REGION:-}"
 TRACE_ROOT="${GO_JUPYTER_TRACE_ROOT:-/var/lib/go-jupyter/traces}"
 LF_STATE="${GO_JUPYTER_LF_STATE:-/var/lib/go-jupyter/langfuse-state}"
 LOCK="${GO_JUPYTER_OFFSITE_LOCK:-/run/lock/go-jupyter-trace-offsite.lock}"
+SYNC_LOCK="${GO_JUPYTER_LOCK:-/run/go-jupyter-trace-sync.lock}"
+SYNC_LOCK_WAIT="${GO_JUPYTER_SYNC_LOCK_WAIT:-900}"
 
 if [ -z "$BUCKET" ]; then
     log "no GO_JUPYTER_TRACE_ARCHIVE_BUCKET in $DEFAULTS: nothing to do (the archive has no off-box copy)"
@@ -75,6 +84,18 @@ if ! flock -n 9; then
     log "another run holds $LOCK: skipping"
     exit 0
 fi
+# A dry run reads only names and sizes, so it does not hold trace-sync up.
+if [ "$DRY" -eq 0 ]; then
+    exec 8>>"$SYNC_LOCK" || { log "cannot open trace-sync's lock $SYNC_LOCK"; exit 1; }
+    if ! flock -w "$SYNC_LOCK_WAIT" 8; then
+        log "run done: bucket=$BUCKET nothing uploaded: trace-sync held $SYNC_LOCK for more than ${SYNC_LOCK_WAIT}s failures=1"
+        exit 1
+    fi
+fi
+
+OUT=""
+cleanup() { if [ -n "$OUT" ]; then unlink "$OUT" 2>/dev/null; fi; }
+trap cleanup EXIT
 
 region_args=()
 [ -n "$REGION" ] && region_args=(--region "$REGION")
@@ -84,28 +105,31 @@ region_args=()
 # Call it directly, not in $( ): log may write to stdout.
 SYNC_N=0
 sync_tree() {
-    local src="$1" prefix="$2" out rc dry=()
+    local src="$1" prefix="$2" rc dry=()
     SYNC_N=0
     [ "$DRY" -eq 1 ] && dry=(--dryrun)
-    out="$(mktemp)" || return 1
-    # 9>&- : aws must not inherit the lock.
+    OUT="$(mktemp)" || return 1
+    # 8>&- 9>&- : aws must not inherit the locks.
     aws s3 sync "$src/" "s3://$BUCKET/$prefix/" "${region_args[@]}" "${dry[@]}" \
-        --no-follow-symlinks --no-progress >"$out" 2>&1 9>&-
+        --no-follow-symlinks --no-progress >"$OUT" 2>&1 8>&- 9>&-
     rc=$?
-    SYNC_N="$(grep -cE '^(\(dryrun\) )?upload: ' "$out")"
-    grep -vE '^(\(dryrun\) )?upload: ' "$out" | head -20 | while IFS= read -r line; do
+    SYNC_N="$(grep -cE '^(\(dryrun\) )?upload: ' "$OUT")"
+    grep -vE '^(\(dryrun\) )?upload: ' "$OUT" | head -20 | while IFS= read -r line; do
         [ -n "$line" ] && log "$prefix: $line"
     done
-    command rm -f "$out"
+    cleanup; OUT=""
     return "$rc"
 }
 
 fail=0; summary=""
 for pair in "$TRACE_ROOT:traces" "$LF_STATE:langfuse-state"; do
     src="${pair%%:*}"; prefix="${pair##*:}"
+    # A missing tree is a failure, not a quiet night: cloud-init creates both,
+    # so absence means a lost or unmounted disk, which is what this copy is for.
     if [ ! -d "$src" ]; then
-        log "$src does not exist: skipped"
+        log "$src does not exist: nothing uploaded from it"
         summary="$summary $prefix=absent"
+        fail=1
         continue
     fi
     sync_tree "$src" "$prefix"; rc=$?

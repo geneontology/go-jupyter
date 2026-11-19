@@ -13,15 +13,26 @@
 # compromised hub cannot read or erase the copy.
 #
 # Nothing here is created when trace_archive_bucket is empty.
+#
+# The bucket outlives any one instance, but it is declared in the instance's
+# stack, like the redirect in redirect.tf. A second stack (the blue/green
+# rebuild in the README) therefore sets trace_archive_manage_bucket = false:
+# it gets the upload grant on the existing bucket and does not try to create
+# it. README, "The off-box copy of the archive", has the hand-over.
 
 locals {
+  # The grant on the instance role.
   trace_archive = var.trace_archive_bucket != ""
+  # The bucket and its settings.
+  trace_archive_bucket_managed = local.trace_archive && var.trace_archive_manage_bucket
+  trace_archive_arn            = "arn:aws:s3:::${var.trace_archive_bucket}"
 }
 
 resource "aws_s3_bucket" "trace_archive" {
-  count  = local.trace_archive ? 1 : 0
+  count  = local.trace_archive_bucket_managed ? 1 : 0
   bucket = var.trace_archive_bucket
-  tags   = local.tags
+  # Named for itself, not for the deployment that happened to create it.
+  tags = merge(local.tags, { Name = var.trace_archive_bucket })
 
   # The bucket outlives the instance on purpose: it is what a rebuild restores
   # from. Removing it is a decision made by hand, not by a plan.
@@ -31,7 +42,7 @@ resource "aws_s3_bucket" "trace_archive" {
 }
 
 resource "aws_s3_bucket_public_access_block" "trace_archive" {
-  count                   = local.trace_archive ? 1 : 0
+  count                   = local.trace_archive_bucket_managed ? 1 : 0
   bucket                  = aws_s3_bucket.trace_archive[0].id
   block_public_acls       = true
   block_public_policy     = true
@@ -40,7 +51,7 @@ resource "aws_s3_bucket_public_access_block" "trace_archive" {
 }
 
 resource "aws_s3_bucket_ownership_controls" "trace_archive" {
-  count  = local.trace_archive ? 1 : 0
+  count  = local.trace_archive_bucket_managed ? 1 : 0
   bucket = aws_s3_bucket.trace_archive[0].id
   rule {
     object_ownership = "BucketOwnerEnforced"
@@ -51,7 +62,7 @@ resource "aws_s3_bucket_ownership_controls" "trace_archive" {
 # nightly upload of a grown file keeps the one before it as a version. An
 # overwrite or a delete marker therefore loses nothing.
 resource "aws_s3_bucket_versioning" "trace_archive" {
-  count  = local.trace_archive ? 1 : 0
+  count  = local.trace_archive_bucket_managed ? 1 : 0
   bucket = aws_s3_bucket.trace_archive[0].id
   versioning_configuration {
     status = "Enabled"
@@ -59,7 +70,7 @@ resource "aws_s3_bucket_versioning" "trace_archive" {
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "trace_archive" {
-  count  = local.trace_archive ? 1 : 0
+  count  = local.trace_archive_bucket_managed ? 1 : 0
   bucket = aws_s3_bucket.trace_archive[0].id
   rule {
     apply_server_side_encryption_by_default {
@@ -71,7 +82,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "trace_archive" {
 # The only lifecycle rule removes the parts of uploads that never completed.
 # No object and no version is ever expired.
 resource "aws_s3_bucket_lifecycle_configuration" "trace_archive" {
-  count  = local.trace_archive ? 1 : 0
+  count  = local.trace_archive_bucket_managed ? 1 : 0
   bucket = aws_s3_bucket.trace_archive[0].id
   rule {
     id     = "abort-incomplete-multipart-uploads"
@@ -85,7 +96,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "trace_archive" {
 }
 
 data "aws_iam_policy_document" "trace_archive_tls" {
-  count = local.trace_archive ? 1 : 0
+  count = local.trace_archive_bucket_managed ? 1 : 0
   statement {
     sid     = "DenyInsecureTransport"
     effect  = "Deny"
@@ -107,7 +118,7 @@ data "aws_iam_policy_document" "trace_archive_tls" {
 }
 
 resource "aws_s3_bucket_policy" "trace_archive" {
-  count      = local.trace_archive ? 1 : 0
+  count      = local.trace_archive_bucket_managed ? 1 : 0
   bucket     = aws_s3_bucket.trace_archive[0].id
   policy     = data.aws_iam_policy_document.trace_archive_tls[0].json
   depends_on = [aws_s3_bucket_public_access_block.trace_archive]
@@ -127,13 +138,13 @@ resource "aws_iam_role_policy" "trace_archive_write" {
         Sid      = "ListArchive"
         Effect   = "Allow"
         Action   = ["s3:ListBucket"]
-        Resource = aws_s3_bucket.trace_archive[0].arn
+        Resource = local.trace_archive_arn
       },
       {
         Sid      = "AddToArchive"
         Effect   = "Allow"
         Action   = ["s3:PutObject", "s3:AbortMultipartUpload"]
-        Resource = "${aws_s3_bucket.trace_archive[0].arn}/*"
+        Resource = "${local.trace_archive_arn}/*"
       },
     ]
   })

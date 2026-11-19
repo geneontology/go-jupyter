@@ -340,16 +340,38 @@ cloud-init (never committed, never in the repo's history):
   *Verify* on the box with `systemctl list-timers 'go-jupyter-trace-offsite*'`
   and `journalctl -t go-jupyter-trace-offsite` (one line per run: files
   uploaded per tree, failures); `go-jupyter-trace-offsite --dry-run` counts
-  what the next run would upload. The box cannot check the copy's content,
-  so that is done from an operator's machine: compare
-  `aws s3 ls --recursive --summarize s3://<bucket>/traces/ | tail -2` with
-  `find /var/lib/go-jupyter/traces -type f | wc -l` and `du -sb` on the box,
-  and compare one object's sha256 with the file's.
-  *Restore* (a rebuilt box, or a lost disk), from a machine that may read the
-  bucket: `aws s3 sync s3://<bucket>/traces/ /var/lib/go-jupyter/traces/` and
-  the same for `langfuse-state/`, then `chown -R root:root` and `chmod 700`
-  on both. An earlier version of a file is `aws s3api list-object-versions
-  --bucket <bucket> --prefix traces/<path>` and `get-object --version-id`.
+  what the next run would upload. While a run uploads it holds trace-sync's
+  lock, so the tree it reads is not being written; trace-sync's ticks in
+  those minutes skip and catch up. The box cannot check the copy's content,
+  so that is done from an operator's machine, for `traces/` and for
+  `langfuse-state/`: compare
+  `aws s3 ls --recursive --summarize s3://<bucket>/traces/ | tail -2`
+  (objects, bytes) with `find /var/lib/go-jupyter/traces -type f | wc -l` and
+  `du -sb --apparent-size /var/lib/go-jupyter/traces` on the box, then
+  download one object (`aws s3 cp s3://<bucket>/traces/<path> .`) and compare
+  its `sha256sum` with the file's on the box.
+  *Restore* (a rebuilt box, or a lost disk). The box's role cannot read the
+  bucket, so download on a machine whose credentials can, into an empty
+  directory (`aws s3 sync s3://<bucket>/traces/ ./traces/`, the same for
+  `langfuse-state/`), copy both to the box (`rsync -a` over ssh, to
+  `/var/lib/go-jupyter/`), and there `chown -R root:root` and
+  `chmod -R u=rwX,go=` on both trees. A sync returns the newest version of
+  each object. Transcripts only grow, so before trusting a restore after a
+  suspected compromise of the box, list versions
+  (`aws s3api list-object-versions --bucket <bucket> --prefix traces/`) and
+  look for any key whose newest version is smaller than an older one: that
+  is an overwrite, and the older version is the good one. One earlier version
+  is fetched with `aws s3api get-object --bucket <bucket> --key traces/<path>
+  --version-id <id> <outfile>`.
+  *A second stack* (the blue/green rebuild below) names the same bucket and
+  sets `trace_archive_manage_bucket = false`: its role gets the upload grant
+  and Terraform does not try to create a bucket that exists. The first
+  stack's `prevent_destroy` on the bucket then stops a plain `terraform
+  destroy` of that stack, on purpose. Before retiring it, hand the bucket
+  over: `terraform state rm` the eight `trace_archive` bucket resources from
+  the old stack, `terraform import` them into the new one, and set
+  `trace_archive_manage_bucket = true` there; a plan should then show no
+  change to the bucket. That is state surgery, done by a person.
   *Rebuilding usage without Langfuse.* Each assistant line of a transcript
   carries `message.model` and `message.usage` (input, output, cache read and
   cache creation tokens); summed per model and day they matched Langfuse's

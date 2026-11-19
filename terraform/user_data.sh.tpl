@@ -461,7 +461,6 @@ install -m 0644 "$REPO_DIR/systemd/go-jupyter-trace-offsite.service" /etc/system
 install -m 0644 "$REPO_DIR/systemd/go-jupyter-trace-offsite.timer" /etc/systemd/system/go-jupyter-trace-offsite.timer
 systemctl daemon-reload
 systemctl enable --now go-jupyter-trace-sync.timer
-systemctl enable --now go-jupyter-trace-offsite.timer
 
 # Caddy: TLS termination + reverse proxy to JupyterHub on localhost:8000.
 # The cloudsmith repo is the official Caddy apt source.
@@ -485,6 +484,8 @@ curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /t
 unzip -q /tmp/awscliv2.zip -d /tmp
 /tmp/aws/install
 rm -rf /tmp/awscliv2.zip /tmp/aws
+# The nightly off-box copy of the archive needs the CLI installed just above.
+systemctl enable --now go-jupyter-trace-offsite.timer
 CERT_TMP="$(mktemp -d)"
 /usr/local/bin/aws s3 cp ${wildcard_cert_s3_uri} - | tar xz -C "$CERT_TMP"
 mkdir -p /etc/go-wildcard
